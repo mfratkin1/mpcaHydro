@@ -164,7 +164,7 @@ class pyWISK():
                start_date = '1996-01-01',
                end_date = '2050-12-31',
                stationgroup_id = None,
-               timezone = 'UTC'):
+               timezone = 'GMT-6'):
         
         if ts_ids is None:
             print('Determing Timeseries IDs')

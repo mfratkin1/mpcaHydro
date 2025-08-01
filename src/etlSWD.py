@@ -143,7 +143,7 @@ def transform(df):
     df['data_type'] = 'discrete'
     df['data_format'] = 'instantaneous'
     df.set_index('datetime',drop=True,inplace=True)
-    df.index = df.index.tz_localize('UTC+06:00')
+    df.index = df.index.tz_localize('UTC-06:00')
     
     df.index = df.index.round('H').round('H')
     df = df.reset_index()

@@ -203,7 +203,7 @@ def transform(data):
     data['data_type'] = 'continuous'
     data['source'] = 'wiski'
     data.set_index('datetime',drop=True,inplace=True)
-    data.index = data.index.tz_convert('UTC+06:00')
+    data.index = data.index.tz_convert('UTC-06:00')
     
     
     data.index = data.index.round('h').round('h')
