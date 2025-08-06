@@ -1,0 +1,7 @@
+[distutils]
+index-servers =
+    pypi
+
+[pypi]
+username = __token__
+password = pypi-AgEIcHlwaS5vcmcCJGE1NGVkNGI2LWQyNzgtNDM3ZS1iZTA3LTRjZGM1NTk3ZjZkNgACKlszLCJjMzNhYzJlMC1lM2NmLTQ0NDctOGM3Yi02ZWI3MWQ2Y2Q5NjkiXQAABiCOl7zzoDVYgRaDy2Goc9n0jIb2gpqi1TaiZoYohELG8A

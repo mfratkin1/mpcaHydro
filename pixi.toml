@@ -1,0 +1,35 @@
+[workspace]
+preview = ["pixi-build"]
+channels = ["conda-forge"]
+name = "mpcaHydro"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+build-wheel = "python -m build --wheel"
+
+[dependencies]
+pandas = ">=2.3.0,<3"
+requests = ">=2.32.4,<3"
+pathlib = ">=1.0.1,<2"
+
+[package]
+name        = "mpcaHydro"
+version     = "0.1.0"
+
+[package.build]
+backend = { name = "pixi-build-python", version = "0.1.*" }
+channels = [
+  "https://prefix.dev/pixi-build-backends",
+  "https://prefix.dev/conda-forge",
+]
+
+
+[package.host-dependencies] 
+hatchling = "1.26.*"
+
+[package.run-dependencies]
+requests    = "*"
+pandas       = "*"
+pathlib = 		"*"
+
