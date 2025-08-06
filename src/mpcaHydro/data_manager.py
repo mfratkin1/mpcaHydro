@@ -8,7 +8,7 @@ Created on Fri Jun  3 10:01:14 2022
 import pandas as pd
 #from abc import abstractmethod
 from pathlib import Path
-from hspf_tools.calibrator import etlWISKI, etlSWD#, etlEQUIS
+from mpcaHydro import etlWISKI, etlSWD#, etlEQUIS
 
 
 #
@@ -36,7 +36,7 @@ class Station
 
 
 '''
-WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent.parent/'WISKI_EQUIS_XREF.csv')
+WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'WISKI_EQUIS_XREF.csv')
 #WISKI_EQUIS_XREF = pd.read_csv('C:/Users/mfratki/Documents/GitHub/hspf_tools/WISKI_EQUIS_XREF.csv')
 
 AGG_DEFAULTS = {'cfs':'mean',

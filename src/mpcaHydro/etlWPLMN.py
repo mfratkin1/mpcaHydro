@@ -8,7 +8,7 @@ Created on Tue Oct  3 08:04:49 2023
 
 
 import pandas as pd
-from hspf_tools.calibrator.WISKI import pyWISK
+from WISKI import pyWISK
 import time
 
 
