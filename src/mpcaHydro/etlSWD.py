@@ -145,7 +145,7 @@ def transform(df):
     df.set_index('datetime',drop=True,inplace=True)
     df.index = df.index.tz_localize('UTC-06:00')
     
-    df.index = df.index.round('H').round('H')
+    df.index = df.index.round('h').round('h')
     df = df.reset_index()
     df = df.groupby(['datetime','variable','unit','station_id','station_name','constituent','data_format','data_type','source']).mean()
     df = df.reset_index()

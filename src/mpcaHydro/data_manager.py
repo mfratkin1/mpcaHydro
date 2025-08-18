@@ -36,7 +36,7 @@ class Station
 
 
 '''
-WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'WISKI_EQUIS_XREF.csv')
+WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'data/WISKI_EQUIS_XREF.csv')
 #WISKI_EQUIS_XREF = pd.read_csv('C:/Users/mfratki/Documents/GitHub/hspf_tools/WISKI_EQUIS_XREF.csv')
 
 AGG_DEFAULTS = {'cfs':'mean',
@@ -232,7 +232,7 @@ class dataManager():
     def get_data(self,station_id,constituent,agg_period = 'D'):
         return self._get_data([station_id],constituent,agg_period)
     
-    def _get_data(self,station_ids,constituent,agg_period = 'D'):
+    def _get_data(self,station_ids,constituent,agg_period = 'D',tz_offset = '-6'):
         '''
         
         Returns the processed observational data associated with the calibration specific id. 
@@ -287,7 +287,10 @@ class dataManager():
             df['data_format'] = dfsub['data_format'].iloc[0]
             df['source'] = dfsub['source'].iloc[0]
 
-       
+
+        # convert to desired timzone before stripping timezone information.
+        #df.index.tz_convert('UTC-06:00').tz_localize(None)
+        df.index = df.index.tz_localize(None)
         return df['value'].to_frame().dropna()
     
 
