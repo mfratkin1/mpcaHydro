@@ -9,7 +9,7 @@ import pandas as pd
 #from abc import abstractmethod
 from pathlib import Path
 from mpcaHydro import etlWISKI, etlSWD#, etlEQUIS
-
+import duckdb
 
 #
 '''
@@ -69,12 +69,59 @@ def are_lists_identical(nested_list):
     # Compare all sublists to the first one
     return all(sublist == sorted_sublists[0] for sublist in sorted_sublists)                                                                                               
 
+def construct_database(folderpath):
+    folderpath = Path(folderpath)
+    db_path = folderpath.joinpath('observations.duckdb').as_posix()
+    with duckdb.connect(db_path) as con:
+        con.execute("DROP TABLE IF EXISTS observations")
+        datafiles = folderpath.joinpath('*.csv').as_posix()
+        query = '''
+        CREATE TABLE observations AS SELECT * 
+        FROM
+        read_csv_auto(?,
+                        union_by_name = true);
+        
+        '''
+        con.execute(query,[datafiles])
+
+
+
 class dataManager():
 
     def __init__(self,folderpath):
         
         self.data = {}
         self.folderpath = Path(folderpath)
+        self.db_path = self.folderpath.joinpath('observations.duckdb')
+
+
+    def constituent_summary(self,constituents = None):
+        with duckdb.connect(self.db_path) as con:
+            if constituents is None:
+                constituents = con.query('''
+                                        SELECT DISTINCT
+                                        constituent
+                                        FROM observations''').to_df()['constituent'].to_list()
+
+            query = '''
+            SELECT
+            station_id,
+            source,
+            constituent,
+            COUNT(*) AS sample_count,
+            year(MIN(datetime)) AS start_date,
+            year(MAX(datetime)) AS end_date
+            FROM
+            observations
+            WHERE
+            constituent in (SELECT UNNEST(?))
+            GROUP BY
+            constituent,station_id,source
+            ORDER BY
+            constituent,sample_count;'''
+        
+            df = con.execute(query,[constituents]).fetch_df()
+        return df
 
     def get_wiski_stations(self):
         return list(WISKI_EQUIS_XREF['WISKI_STATION_NO'].unique())
@@ -108,6 +155,17 @@ class dataManager():
             return []
         else:
             return wiski_ids
+        
+    def equis_wiski_alias(self,equis_station_id):
+        wiski_ids =  list(set(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WISKI_EQUIS_ID'] == equis_station_id,'WISKI_STATION_NO'].to_list()))
+        wiski_ids = [wiski_id for wiski_id in wiski_ids if not pd.isna(wiski_id)]
+        if len(wiski_ids) == 0:
+            return []
+        elif len(wiski_ids) > 1:
+            print(f'Too Many WISKI Stations for {equis_station_id}')
+            raise 
+        else:
+            return wiski_ids[0]
 
     def _equis_wiski_associations(self,equis_station_ids):
         wiski_stations = [self.equis_wiski_associations(equis_station_id) for equis_station_id in equis_station_ids]
