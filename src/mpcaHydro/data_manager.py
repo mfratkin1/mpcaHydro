@@ -115,6 +115,25 @@ class dataManager():
             return wiski_stations[0]
         else:
             return []
+            
+    def _stations_by_wid(self,wid_no,station_origin):
+        if station_origin in ['wiski','wplmn']:
+            station_col = 'WISKI_STATION_NO'
+        elif station_origin in ['equis','swd']:
+            station_col = 'EQUIS_STATION_ID'
+        else:
+            raise
+            
+        return list(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WID'] == wid_no,station_col].unique())
+
+    
+    def download_stations_by_wid(self, wid_no,station_origin, folderpath = None, overwrite = False):
+
+        station_ids = self._station_by_wid(wid_no,station_origin)
+        
+        if not station_ids.empty:
+            for _, row in station_ids.iterrows():
+                self.download_station_data(row['station_id'],station_origin, folderpath, overwrite)
 
     def _download_station_data(self,station_id,station_origin,overwrite=False): 
         assert(station_origin in ['wiski','equis','swd','wplmn'])
