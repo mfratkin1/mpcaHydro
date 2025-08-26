@@ -85,6 +85,26 @@ def construct_database(folderpath):
         con.execute(query,[datafiles])
 
 
+def constituent_summary(db_path):
+    with duckdb.connect(db_path) as con:
+        query = '''
+        SELECT
+          station_id,
+          source,
+          constituent,
+          COUNT(*) AS sample_count,
+          year(MIN(datetime)) AS start_date,
+          year(MAX(datetime)) AS end_date
+        FROM
+          observations
+        GROUP BY
+          constituent, station_id,source
+        ORDER BY
+          sample_count;'''
+          
+        res = con.execute(query)
+        return res.fetch_df()
+
 
 class dataManager():
 
@@ -94,7 +114,10 @@ class dataManager():
         self.folderpath = Path(folderpath)
         self.db_path = self.folderpath.joinpath('observations.duckdb')
 
-
+    def _reconstruct_database(self):
+        construct_database(self.folderpath)
+        
+        
     def constituent_summary(self,constituents = None):
         with duckdb.connect(self.db_path) as con:
             if constituents is None:
