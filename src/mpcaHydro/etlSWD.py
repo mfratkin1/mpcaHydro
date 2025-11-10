@@ -6,41 +6,15 @@ Created on Tue Oct 10 14:13:23 2023
 """
 
 import pandas as pd
+from pathlib import Path
 #from hspf_tools.orm.models import Station
 # import geopandas as gpd
 
+EQUIS_PARAMETER_XREF = pd.read_csv(Path(__file__).parent/'data/EQUIS_PARAMETER_XREF.csv')
 
 
-
-                   
-CONSTITUENT_MAP = {'Total suspended solids':'TSS',
-                   'Total solids': 'TSS',
-                   'Solids, Suspended' : 'TSS',
-                   'Solids, Total Suspended' : 'TSS',
-                  'Residue - nonfilterable (TSS)': 'TSS',
-                 'Kjeldahl nitrogen as N': 'TKN',
-                 'Inorganic nitrogen (nitrate and nitrate) as N': 'N',
-                 'Nitrogen, Total Kjeldahl (TKN) as N': 'TKN',
-                 'Nitrate + Nitrite Nitrogen, Total as N': 'N',
-                 'Nitrate/Nitrite as N (N+N) as N': 'N',
-                 'Nutrient-nitrogen as N': 'N',
-                 'Nitrate/Nitrite as N': 'N',
-                 'Phosphorus, Total as P as P':'TP',
-                 'Phosphorus, Total as P' : 'TP',
-                 'Phosphorus as P': 'TP',
-                 'Total Phosphorus as P': 'TP',
-                 'Orthophosphate as P': 'OP',
-                 'Carbonaceous biochemical oxygen demand, standard conditions': 'BOD',
-                 'Chemical oxygen demand':'BOD',
-                 'Biochemical oxygen demand, standard conditions': 'BOD',
-                 'Chlorophyll a, corrected for pheophytin':'CHLA',
-                 'Chlorophyll-A':'CHLA',
-                 'Chlorophyll-a, Pheophytin Corrected':'CHLA',
-                 'Flow':'Q',
-                 'Temperature, water': 'WT',
-                 'Dissolved oxygen': 'DO',
-                 'Dissolved oxygen (DO)': 'DO',
-                 'Suspended Sediment Concentration': 'SSC'}    
+CONSTITUENT_MAP = {i[0]:i[1] for i in EQUIS_PARAMETER_XREF[['PARAMETER','constituent']].values}
+  
 
 # station_no  = 	'S010-822'
 # data = download(station_no)
@@ -164,6 +138,14 @@ def transform(df):
     return df
 
 def load(df,file_path):
+    '''
+    date, time, value, variable, unit, station_id, station_name, constituent, source, data_format, data_type, quality_code, 
+    
+    
+    
+    '''
+
+
     df.to_csv(file_path)      
     
     
