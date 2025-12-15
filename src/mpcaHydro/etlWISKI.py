@@ -6,10 +6,9 @@ Created on Tue Oct  3 08:04:49 2023
 """
 
 import pandas as pd
-from mpcaHydro.WISKI import pyWISK
+from mpcaHydro import pywisk
 #from hspf_tools.orm.models import Station
 import time
-wiski = pyWISK()
 
 
 '''
@@ -45,8 +44,8 @@ PARAMETERTYPE_MAP ={'11522': 'TP',
                     '11521': 'TKN',
                     '11500' : 'Q',
                     '11504': 'WT',
-                    '11533': 'DO',
-                    '11507':'WL'}
+                    '11533': 'DO'}
+#                    '11507':'WL'}
 #STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*','5034' ,'5035','5005', '5004','5014' ,'5015','5024'  ,'5025','5044' ,'5045']
 STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*']
 
@@ -115,7 +114,12 @@ TS_NAME_SELECTOR = {'Q':{'Internal':{'daily':'20.Day.Mean.Archive',
                     'DO':{'Internal':{'daily':'20.Day.Mean',
                                       'unit': '09.Archive'},
                           'External': {'daily': '20.Day.Mean',
-                                       'unit': '08.Provisional.Edited'}}}
+                                       'unit': '08.Provisional.Edited'}},
+                    'TRB':{'Internal':{'daily':'20.Day.Mean',
+                                    'unit': '09.Archive'},
+                        'External': {'daily': '20.Day.Mean',
+                                    'unit': '08.Provisional.Edited'}},
+                }
 
 
 
@@ -123,9 +127,11 @@ CONSTITUENT_NAME_NO = {'Q'  :['262*'],#,'263'],
                        'WT' :['450*', '451*'], # '450.42','451.42'],
                        'OP' :['863*'],
                        'DO' :['866*'],
+                       'TRB': ['811*'],
+                       'TDS': ['2175*'],
                        'TP' :None,
                        'TSS':None,
-                       'N'  :None,
+                       'N'  :['341*'],
                        'TKN':None}
 
 CONSTITUENT_NAME_NO_WPLMN = {'Q'  :['262*'],#,'263'],
@@ -137,7 +143,7 @@ CONSTITUENT_NAME_NO_WPLMN = {'Q'  :['262*'],#,'263'],
                        'N'  :['5024'  ,'5025'],
                        'TKN':['5044' ,'5045']}
 
-VALID_CONSTITUENTS = ['Q','WT','OP','DO','TP','TSS','N','TKN']
+VALID_CONSTITUENTS = ['Q','WT','OP','DO','TP','TSS','N','TKN','TRB']
 
 # def _info(station_nos):
 #     station_info = info(station_nos)
@@ -152,10 +158,73 @@ VALID_CONSTITUENTS = ['Q','WT','OP','DO','TP','TSS','N','TKN']
 #                    latitude = station_info.iloc[0]['station_latitude'],
 #                    longitude = station_info.iloc[0]['station_longitude'],
 #                    station_type = 'River')
+
+
+def extract(station_nos, constituent, dbpath, start_year = 1996, end_year = 2030, wplmn = False):
+    '''
+    given a list of station_nos, download all data relevent to HSPF from MPCA WISKI and store in a duckdb database
+    
+    1. Find relevent timeseries ids for each constituent
+    2. Download data for each timeseries id
+    3. Store data in duckdb database
+    
+    '''
+    #1. Find relevent timeseries ids for each constituent
+    if station_nos[0] == 'E':
+        ts_names = TS_NAME_SELECTOR[constituent]['External']
+    else:
+        ts_names =TS_NAME_SELECTOR[constituent]['Internal']
+    
+    if wplmn:
+        constituent_nos = CONSTITUENT_NAME_NO_WPLMN[constituent]
+    else:
+        constituent_nos = CONSTITUENT_NAME_NO[constituent]
         
+    ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
+                        stationparameter_no = constituent_nos,
+                        ts_name = ts_names['unit'])
+    
+    jsons = []
+    for ts_id in ts_ids:
+        jsons.append(download_chunk(ts_id,start_year,end_year,as_json = True))
+        time.sleep(.1)
+
+
+
+    
+    # Connect to DuckDB (in-memory database)
+    con = duckdb.connect(database=':memory:')
+
+    # Register the Python list of dictionaries as a virtual table
+    # DuckDB can automatically infer the schema from this list.
+    con.register("my_json_table", json_data)
+    return jsons
+
+
+    # with duckdb.connect(db_path) as con:
+    #     con.execute("DROP TABLE IF EXISTS observations")
+    #     datafiles = folderpath.joinpath('*.csv').as_posix()
+    #     query = '''
+    #     CREATE TABLE observations AS SELECT * 
+    #     FROM
+    #     read_csv_auto(?,
+    #                     union_by_name = true);
+        
+    #     '''
+    #     con.execute(query,[datafiles])
+
+    
+    # con = duckdb.connect(database=db_path))
+    # print('Downloading Timeseries Data')
+    # df = pd.concat([_download(constituent,station_nos,start_year,end_year,raw = True, wplmn = False) for constituent in VALID_CONSTITUENTS])
+    # df.to_csv(filepath,index = False)
+    # print('Timeseries Data Downloaded!')
+
+    
+
 
 def info(station_nos):
-    ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+    ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
                         stationparameter_no = STATIONPARAMETER_NOS)
     ts_ids = ts_ids.drop_duplicates(subset = 'parametertype_name')
     ts_ids['constituent'] = ts_ids['parametertype_id'].map(PARAMETERTYPE_MAP)
@@ -168,7 +237,7 @@ def download(station_nos,start_year = 1996, end_year = 2030, raw = False,wplmn =
     print('Downloading Timeseries Data')
     df = pd.concat([_download(constituent,station_nos,start_year,end_year,raw,wplmn) for constituent in VALID_CONSTITUENTS])
     
-    station_metadata = wiski.get_stations(station_no = station_nos,returnfields = ['stationgroup_id'])
+    station_metadata = pywisk.get_stations(station_no = station_nos,returnfields = ['stationgroup_id'])
     if any(station_metadata['stationgroup_id'].isin(['1319204'])):
         df['wplmn_flag'] = 1
     else:
@@ -234,13 +303,13 @@ def _download(constituent,station_nos,start_year = 1996,end_year = 2030, raw = F
     else:
         constituent_nos = CONSTITUENT_NAME_NO[constituent]
         
-    ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+    ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
                         stationparameter_no = constituent_nos,
                         ts_name = ts_names['unit'])
     
     interval_minutes = 60
     if ts_ids.empty:
-        ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+        ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
                             stationparameter_no = constituent_nos,
                             ts_name = ts_names['daily'])
         interval_minutes = 1440 
@@ -263,14 +332,14 @@ def _download(constituent,station_nos,start_year = 1996,end_year = 2030, raw = F
     return df
 
 
-def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 5):
+def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 5, as_json = False):
     frames = [pd.DataFrame()]
 
     for start in range(start_year,end_year,interval):
         end = int(start + interval-1)
         if end > end_year:
             end = end_year
-        df = wiski.get_ts(ts_id,start_date = f'{start}-01-01',end_date = f'{end}-12-31')
+        df = pywisk.get_ts(ts_id,start_date = f'{start}-01-01',end_date = f'{end}-12-31',as_json = as_json)
         if not df.empty: frames.append(df)
         df.index = pd.to_datetime(df['Timestamp'])
         time.sleep(.1)   
@@ -327,7 +396,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 #     else:
 #         ts_names = ['15.Rated']
         
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                         stationparameter_no = ['262*'],
 #                         ts_name = ts_names)
     
@@ -353,7 +422,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 #         ts_names = ['09.Archive']
   
     
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['450*','450.42*','451*','451.42*'],
 #                       ts_name = ts_names)
         
@@ -380,7 +449,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 #     else:
 #         ts_names = ['09.Archive']
   
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['866*'],
 #                       ts_name = ts_names)
         
@@ -397,7 +466,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 
 
 # def orthophosphate(station_nos,start_year = 1996,end_year = 2030,raw=False):
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['5034','5035'],
 #                       ts_name = ['20.Day.Mean'])
         
@@ -416,7 +485,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 
 # def total_phosphorous(station_nos,start_year = 1996,end_year = 2030,raw=False):
   
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['5004','5005'],
 #                       ts_name = ['20.Day.Mean'])    
 #     if ts_ids.empty:
@@ -434,7 +503,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 
 # def total_suspended_solids(station_nos,start_year = 1996,end_year = 2030,raw=False):
   
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['5014','5015'],
 #                       ts_name = ['20.Day.Mean'])
 #     if ts_ids.empty:
@@ -452,7 +521,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 
 # def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
   
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['5044','5045'],
 #                       ts_name = ['20.Day.Mean'])
         
@@ -471,7 +540,7 @@ def tkn(station_nos,start_year = 1996,end_year = 2030,raw=False):
 
 # def nitrogen(station_nos,start_year = 1996,end_year = 2030,raw=False):
   
-#     ts_ids = wiski.get_ts_ids(station_nos = station_nos,
+#     ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
 #                       stationparameter_no = ['5024','5025'],
 #                       ts_name = ['20.Day.Mean'])
         
