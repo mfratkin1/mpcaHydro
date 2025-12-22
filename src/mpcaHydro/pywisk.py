@@ -123,7 +123,7 @@ class Service():
     
     def get(self,args):
         request_type = args['request']
-        assert(request_type in self.getRequests())
+        #assert(request_type in self.getRequests())
         _args = {queryfield: None for queryfield in self.queryfields(request_type)} | {optionalfield: None for optionalfield in self.optionalfields(request_type)}
         args = {**_args, **args}
         self._args = args        
