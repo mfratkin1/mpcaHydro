@@ -210,14 +210,14 @@ def convert_units(df):
     # Convert units
     #Water temperature``
     df.loc[:,'ts_unitsymbol'] = df['ts_unitsymbol'].str.lower()
-    df.replace({'ts_unitsymbol':'°c'},'degF',inplace = True)
-    df.loc[df['ts_unitsymbol'] == 'degF','Value'] = df.loc[df['ts_unitsymbol'] == 'degF','Value'].apply(lambda x: (x*9/5)+32)
+    df.replace({'ts_unitsymbol':'°c'},'degf',inplace = True)
+    df.loc[df['ts_unitsymbol'] == 'degf','Value'] = df.loc[df['ts_unitsymbol'] == 'degf','Value'].apply(lambda x: (x*9/5)+32)
 
     # Convert kg to lb
     df.loc[df['ts_unitsymbol'] == 'kg','Value'] = df.loc[df['ts_unitsymbol'] == 'kg','Value'].apply(lambda x: (x*2.20462))
     df.replace({'ts_unitsymbol':'kg'},'lb',inplace=True)
 
-    # Convert ft3/s to cfs
+    # rename ft3/s to cfs
     df.replace({'ts_unitsymbol':'ft³/s'},'cfs',inplace=True)
     return df
 
@@ -246,20 +246,23 @@ def average_results(df):
 def calculate_baseflow(df, method = 'Boughton'):
     dfs = [df]
     for station_id in df['station_id'].unique():
-        df_station = df[['datetime','value']].loc[df['station_id'] == station_id,:].copy().set_index('datetime')
-        df_baseflow = bf.single(df_station['value'], area = None, method = method,return_kge = False)[0][method]
-        
-        df_baseflow = pd.DataFrame(
-            {
-                "station_id": station_id,
-                "station_origin": 'wiski',
-                "datetime": df_baseflow.index,
-                "value": df_baseflow.values,
-                "constituent": 'QB',
-                "unit": 'cfs',
-            }
-        )
-        dfs.append(df_baseflow)
+        df_station = df.query(f'constituent == "Q" & station_id == "{station_id}"')[['datetime', 'value']].copy().set_index('datetime')
+        if df_station.empty:
+            continue
+        else:
+            df_baseflow = bf.single(df_station['value'], area = None, method = method,return_kge = False)[0][method]
+            
+            df_baseflow = pd.DataFrame(
+                {
+                    "station_id": station_id,
+                    "station_origin": 'wiski',
+                    "datetime": df_baseflow.index,
+                    "value": df_baseflow.values,
+                    "constituent": 'QB',
+                    "unit": 'cfs',
+                }
+            )
+            dfs.append(df_baseflow)
     
     return pd.concat(dfs)
 
