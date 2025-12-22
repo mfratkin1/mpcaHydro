@@ -8,34 +8,11 @@ Created on Fri Jun  3 10:01:14 2022
 import pandas as pd
 #from abc import abstractmethod
 from pathlib import Path
-from mpcaHydro import etlWISKI, etlSWD#, etlEQUIS
+from mpcaHydro import etlSWD
+from mpcaHydro import equis, wiski, warehouse
 import duckdb
 
-#
-'''
-Q
-WT
-TSS
-N
-TKN
-OP
-TP
-CHLA
-DO
 
-
-class Station
-
-- id
-- name
-- source
-- data
-
-
-
-
-
-'''
 WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'data/WISKI_EQUIS_XREF.csv')
 #WISKI_EQUIS_XREF = pd.read_csv('C:/Users/mfratki/Documents/GitHub/hspf_tools/WISKI_EQUIS_XREF.csv')
 
@@ -45,6 +22,7 @@ AGG_DEFAULTS = {'cfs':'mean',
                 'lb':'sum'}
 
 UNIT_DEFAULTS = {'Q': 'cfs',
+                 'QB': 'cfs',
                  'TSS': 'mg/l',
                  'TP' : 'mg/l',
                  'OP' : 'mg/l',
@@ -52,16 +30,6 @@ UNIT_DEFAULTS = {'Q': 'cfs',
                  'N'  : 'mg/l',
                  'WT' : 'degF',
                  'WL' : 'ft'}
-
-# VALID_UNITS = {'Q': 'cfs',
-#                  'TSS': 'mg/l','lb',
-#                  'TP' : 'mg/l',
-#                  'OP' : 'mg/l',
-#                  'TKN': 'mg/l',
-#                  'N'  : 'mg/l',
-#                  'WT' : 'degF',
-#                  'WL' : 'ft'}
-
 
 def are_lists_identical(nested_list):
     # Sort each sublist
@@ -85,12 +53,17 @@ def construct_database(folderpath):
         con.execute(query,[datafiles])
 
 
+def build_warehouse(folderpath):
+    folderpath = Path(folderpath)
+    db_path = folderpath.joinpath('observations.duckdb').as_posix()
+    warehouse.init_db(db_path)
+
 def constituent_summary(db_path):
     with duckdb.connect(db_path) as con:
         query = '''
         SELECT
           station_id,
-          source,
+          station_origin,
           constituent,
           COUNT(*) AS sample_count,
           year(MIN(datetime)) AS start_date,
@@ -98,7 +71,7 @@ def constituent_summary(db_path):
         FROM
           observations
         GROUP BY
-          constituent, station_id,source
+          constituent, station_id,station_origin
         ORDER BY
           sample_count;'''
           
@@ -108,15 +81,29 @@ def constituent_summary(db_path):
 
 class dataManager():
 
-    def __init__(self,folderpath):
+    def __init__(self,folderpath, oracle_user = None, oracle_password =None):
         
         self.data = {}
         self.folderpath = Path(folderpath)
         self.db_path = self.folderpath.joinpath('observations.duckdb')
-
+        self.oracle_user = oracle_user
+        self.oracle_password = oracle_password
+    
+    def connect_to_oracle(self):
+        assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
+        equis.connect(user = self.oracle_user, password = self.oracle_password)
+    
+    def credentials_exist(self):
+        if (self.oracle_user is not None) & (self.oracle_password is not None):
+            return True
+        else:
+            return False
+        
     def _reconstruct_database(self):
         construct_database(self.folderpath)
-        
+    
+    def _build_warehouse(self):
+        build_warehouse(self.folderpath)
         
     def constituent_summary(self,constituents = None):
         with duckdb.connect(self.db_path) as con:
@@ -129,7 +116,7 @@ class dataManager():
             query = '''
             SELECT
             station_id,
-            source,
+            station_origin,
             constituent,
             COUNT(*) AS sample_count,
             year(MIN(datetime)) AS start_date,
@@ -139,7 +126,7 @@ class dataManager():
             WHERE
             constituent in (SELECT UNNEST(?))
             GROUP BY
-            constituent,station_id,source
+            constituent,station_id,station_origin
             ORDER BY
             constituent,sample_count;'''
         
@@ -219,27 +206,22 @@ class dataManager():
     def _download_station_data(self,station_id,station_origin,overwrite=False): 
         assert(station_origin in ['wiski','equis','swd','wplmn'])
         if station_origin == 'wiski':
-            #equis_stations = list(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WISKI_STATION_NO'] == station_id,'WISKI_EQUIS_ID'].unique())
-            #[self.download_station_data(equis_station,'equis',overwrite = overwrite) for equis_station in equis_stations]
             self.download_station_data(station_id,'wiski',overwrite = overwrite)
-            equis_alias = self.wiski_equis_alias(station_id)
-            self.download_station_data(equis_alias,'swd',overwrite = overwrite)
         elif station_origin == 'wplmn':
             self.download_station_data(station_id,'wplmn',overwrite = overwrite)
-            equis_alias = self.wiski_equis_alias(station_id)
-            self.download_station_data(equis_alias,'swd',overwrite = overwrite)
+        elif station_origin == 'swd':
+            self.download_station_data(station_id,'swd',overwrite = overwrite)
         else:
-            wiski_station = self.equis_wiski_associations(station_id)
-            #wiski_station = WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['EQUIS_STATION_ID'] == station_id,'WISKI_STATION_NO']
             self.download_station_data(station_id,'equis',overwrite = overwrite)
-            self.download_station_data(wiski_station,'wiski',overwrite = overwrite)
-        
 
-    def download_station_data(self,station_id,source,folderpath=None,overwrite = False):
-        assert(source in ['wiski','equis','swd','wplmn'])
+
+       
+
+    def download_station_data(self,station_id,station_origin,start_year = 1996, end_year = 2030,folderpath=None,overwrite = False,baseflow_method = 'Boughton'):
+        assert(station_origin in ['wiski','equis','swd','wplmn'])
         station_id = str(station_id)
         save_name = station_id
-        if source == 'wplmn':
+        if station_origin == 'wplmn':
             save_name = station_id + '_wplmn'
         
         if folderpath is None:
@@ -252,16 +234,16 @@ class dataManager():
             print (f'{station_id} data already downloaded')
             return
         
-        if source == 'wiski':
-            data = etlWISKI.download(station_id)
-        elif source == 'swd':
+        if station_origin == 'wiski':
+            data = wiski.transform(wiski.download([station_id],wplmn=False, baseflow_method = baseflow_method))
+        elif station_origin == 'swd':
             data = etlSWD.download(station_id)
-        elif source == 'equis':
-            data = etlSWD.download(station_id)
+        elif station_origin == 'equis':
+            assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
+            data = equis.transform(equis.download([station_id]))
         else:
-            data = etlWISKI.download(station_id,wplmn=True)
-            #raise NotImplementedError()
-            #data = etlEQUIS.download(station_id)
+            data = wiski.transform(wiski.download([station_id],wplmn=True, baseflow_method = baseflow_method))
+        
 
        
         
@@ -269,10 +251,20 @@ class dataManager():
             data.to_csv(folderpath.joinpath(save_name + '.csv'))
             self.data[station_id] = data
         else:
-            print(f'No {source} calibration cata available at Station {station_id}')
-        
+            print(f'No {station_origin} calibration cata available at Station {station_id}')
         
     def _load(self,station_id):
+        with duckdb.connect(self.db_path) as con:
+            query = '''
+            SELECT *
+            FROM analytics.observations
+            WHERE station_id = ?'''
+            df = con.execute(query,[station_id]).fetch_df()
+            df.set_index('datetime',inplace=True)
+            self.data[station_id] = df
+            return df
+
+    def _load2(self,station_id):
         df =  pd.read_csv(self.folderpath.joinpath(station_id + '.csv'), 
                           index_col='datetime', 
                           parse_dates=['datetime'], 
@@ -285,12 +277,7 @@ class dataManager():
         try:
             df = self.data[station_id]
         except:
-            df =  pd.read_csv(self.folderpath.joinpath(station_id + '.csv'), 
-                              index_col='datetime', 
-                              parse_dates=['datetime'], 
-                              #usecols=['Ts Date','Station number','variable', 'value','reach_id'],
-                              dtype={'station_id': str, 'value': float, 'variable': str,'constituent':str,'unit':str})
-            self.data[station_id] = df
+            df = self._load(station_id)
         return df
     
     def info(self,constituent):
@@ -308,7 +295,7 @@ class dataManager():
         
         dfsub = dfsub.loc[(dfsub['constituent'] == constituent) & 
                               (dfsub['unit'] == unit),
-                              ['value','data_format','source']]
+                              ['value','station_origin']]
 
         
         df = dfsub[['value']].resample(agg_period).agg(agg_func)
@@ -317,8 +304,7 @@ class dataManager():
             dfsub = df
         else:
             
-            df['data_format'] = dfsub['data_format'].iloc[0]
-            df['source'] = dfsub['source'].iloc[0]
+            df['station_origin'] = dfsub['station_origin'].iloc[0]
             
             #if (constituent == 'TSS') & (unit == 'lb'): #convert TSS from lbs to us tons
             #    dfsub['value'] = dfsub['value']/2000
@@ -365,15 +351,18 @@ class dataManager():
 
         '''
         
-        assert constituent in ['Q','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
+        assert constituent in ['Q','QB','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
         
         unit = UNIT_DEFAULTS[constituent]
         agg_func = AGG_DEFAULTS[unit]
             
         dfsub = pd.concat([self.load(station_id) for station_id in station_ids]) # Check cache
+        dfsub.index = dfsub.index.tz_localize(None) # Drop timezone info
+        #dfsub.set_index('datetime',drop=True,inplace=True)
+        dfsub.rename(columns={'source':'station_origin'},inplace=True)
         dfsub = dfsub.loc[(dfsub['constituent'] == constituent) &
                               (dfsub['unit'] == unit),
-                              ['value','data_format','source']]   
+                              ['value','station_origin']]   
         
         df = dfsub[['value']].resample(agg_period).agg(agg_func)
         df.attrs['unit'] = unit
@@ -384,13 +373,12 @@ class dataManager():
             return df
         else:
             
-            df['data_format'] = dfsub['data_format'].iloc[0]
-            df['source'] = dfsub['source'].iloc[0]
+            df['station_origin'] = dfsub['station_origin'].iloc[0]
 
 
         # convert to desired timzone before stripping timezone information.
         #df.index.tz_convert('UTC-06:00').tz_localize(None)
-        df.index = df.index.tz_localize(None)
+    
         return df['value'].to_frame().dropna()
     
 
