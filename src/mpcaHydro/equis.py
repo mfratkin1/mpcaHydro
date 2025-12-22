@@ -24,12 +24,14 @@ CAS_RN_MAP = {'479-61-8':'CHLA',
 
 def connect(user: str, password: str, host: str = "DELTAT", port: int = 1521, sid: str = "DELTAT"):
     '''Create and return an Oracle database connection.'''
-    connection = oracledb.connect(user=user, 
+    
+    global CONNECTION
+    CONNECTION = oracledb.connect(user=user, 
                                  password=password, 
                                  host=host, 
                                  port=port, 
                                  sid=sid) 
-    return connection
+    return CONNECTION
 
 def close_connection():
     '''Close the global Oracle database connection if it exists.'''
@@ -154,6 +156,8 @@ def as_utc_offset(naive_dt: Union[datetime, str], tz_label: str, target_offset: 
         src_tz = timezone(timedelta(hours=-6))
     elif label == "CDT":
         src_tz = timezone(timedelta(hours=-5))
+    elif label == 'UTC':
+        src_tz = timezone.utc
     else:
         raise ValueError(f"Unexpected timezone label: {tz_label}")
     # attach the source tz (interpret naive as local time in src_tz)
@@ -196,19 +200,21 @@ def normalize_timezone(df):
 def convert_units(df):
     '''Convert units in Equis data to standard units.'''
     # Convert ug/L to mg/L
-    mask_ugL = df['RESULT_UNIT'].str.lower() == 'ug/l'
+    df['RESULT_UNIT'] = df['RESULT_UNIT'].str.lower()
+
+    mask_ugL = df['RESULT_UNIT'] == 'ug/l'
     df.loc[mask_ugL, 'RESULT_NUMERIC'] = df.loc[mask_ugL, 'RESULT_NUMERIC'] / 1000
-    df.loc[mask_ugL, 'RESULT_UNIT'] = 'mg/L'
+    df.loc[mask_ugL, 'RESULT_UNIT'] = 'mg/l'
 
     # Convert mg/g to mg/L (assuming density of 1 g/mL)
-    mask_mgg = df['RESULT_UNIT'].str.lower() == 'mg/g'
+    mask_mgg = df['RESULT_UNIT'] == 'mg/g'
     df.loc[mask_mgg, 'RESULT_NUMERIC'] = df.loc[mask_mgg, 'RESULT_NUMERIC'] * 1000
-    df.loc[mask_mgg, 'RESULT_UNIT'] = 'mg/L'
+    df.loc[mask_mgg, 'RESULT_UNIT'] = 'mg/l'
 
     # Convert deg C to degF
-    mask_degC = df['RESULT_UNIT'].str.lower().isin(['deg c', 'degc'])
+    mask_degC = df['RESULT_UNIT'].isin(['deg c', 'degc'])
     df.loc[mask_degC, 'RESULT_NUMERIC'] = (df.loc[mask_degC, 'RESULT_NUMERIC'] * 9/5) + 32
-    df.loc[mask_degC, 'RESULT_UNIT'] = 'degF'
+    df.loc[mask_degC, 'RESULT_UNIT'] = 'degf'
 
     return df
 
