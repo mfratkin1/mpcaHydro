@@ -8,7 +8,7 @@ Created on Tue Oct  3 08:04:49 2023
 
 
 import pandas as pd
-from WISKI import pyWISK
+from mpcaHydro.pyWISK import pyWISK
 import time
 
 
@@ -83,7 +83,7 @@ def transform(data):
     data = data.loc[:,['datetime','value','variable','unit','quality_id','station_id','station_name','constituent']]
     
     data['unit'].replace('ft³/s','cfs',inplace=True)
-    data['source'] = 'wplmn'
+    data['station_origin'] = 'wplmn'
     return data
     
     # data['Timestamp'] = pd.to_datetime(data['Timestamp']).dt.date

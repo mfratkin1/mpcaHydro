@@ -270,14 +270,14 @@ def transform(data):
     data.loc[:,'unit'] = data['unit'].str.lower()
     data.replace({'unit':'°f'},'degF',inplace = True)
     data['data_type'] = 'continuous'
-    data['source'] = 'wiski'
+    data['station_origin'] = 'wiski'
     data.set_index('datetime',drop=True,inplace=True)
     data.index = data.index.tz_convert('UTC-06:00')
     
     
     data.index = data.index.round('h').round('h')
     data = data.reset_index()
-    data = data.groupby(['datetime','variable','unit','station_id','station_name','constituent','interval_minutes','data_format','data_type','source']).mean()
+    data = data.groupby(['datetime','variable','unit','station_id','station_name','constituent','interval_minutes','data_format','data_type','station_origin']).mean()
     data = data.reset_index()
     data = data.set_index('datetime')
     

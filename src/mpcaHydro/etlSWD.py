@@ -98,11 +98,10 @@ def transform(df):
                            'resultUnit':'unit'},inplace=True)
     
     df['constituent'] = df['variable'].map(CONSTITUENT_MAP)
-    df['source'] = 'swd'
+    df['station_origin'] = 'swd'
     df['quality_id'] = pd.NA
     station_name = df.iloc[0]['station_name']
-    df = df.loc[:,['datetime','value','variable','unit','station_id','station_name','constituent','source']]
-    
+    df = df.loc[:,['datetime','value','variable','unit','station_id','station_name','constituent','station_origin']]
     
     df = df.astype({'value':float,
                'unit':str,
@@ -130,7 +129,7 @@ def transform(df):
     
     df.index = df.index.round('h').round('h')
     df = df.reset_index()
-    df = df.groupby(['datetime','variable','unit','station_id','station_name','constituent','data_format','data_type','source']).mean()
+    df = df.groupby(['datetime','variable','unit','station_id','station_name','constituent','data_format','data_type','station_origin']).mean()
     df = df.reset_index()
     df = df.set_index('datetime')
     df['quality_id'] = pd.NA
@@ -139,7 +138,7 @@ def transform(df):
 
 def load(df,file_path):
     '''
-    date, time, value, variable, unit, station_id, station_name, constituent, source, data_format, data_type, quality_code, 
+    date, time, value, variable, unit, station_id, station_name, constituent, station_origin, data_format, data_type, quality_code, 
     
     
     
