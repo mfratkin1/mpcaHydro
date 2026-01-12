@@ -197,11 +197,6 @@ def tkn(station_nos,start_year = 1996,end_year = 2030):
     return _download('TKN',station_nos,start_year,end_year)
 
 
-def filter_quality_codes(df):
-    '''
-    Filter dataframe by valid quality codes
-    '''
-    return df.loc[df['Quality Code'].isin(DATA_CODES)]
 
 def convert_units(df):
     '''
@@ -233,9 +228,19 @@ def normalize_columns(df):
         'station_no':'station_id',
         'Timestamp':'datetime',
         'Value':'value',
-        'ts_unitsymbol':'unit'}, inplace=True)
+        'ts_unitsymbol':'unit',
+        'Quality Code':'quality_code',
+        'Quality Code Name':'quality_code_name'}, inplace=True)
     return df
     
+
+
+def filter_quality_codes(df, data_codes):
+    '''
+    Filter dataframe by valid quality codes
+    '''
+    return df.loc[df['quality_code'].isin(data_codes)]
+
 def average_results(df):
     df['datetime'] = pd.to_datetime(df.loc[:,'datetime'])
     df['datetime'] = df['datetime'].dt.round('h')
@@ -267,14 +272,34 @@ def calculate_baseflow(df, method = 'Boughton'):
     return pd.concat(dfs)
 
 
-def transform(df, baseflow_method = 'Boughton'):
+def normalize(df):
     '''
-    Transform raw WISKI data into standardized format
+    Standardize raw WISKI data into standardized format without transformations.
+    The standardized format includes normalized column names and units.
+    ---
+    Parameters:
+    df (pandas.DataFrame): Raw WISKI data
+    Returns:
+    pandas.DataFrame: Normalized WISKI data
     '''
-    df = filter_quality_codes(df)
+
     df = convert_units(df)
     df = normalize_columns(df)
+    return df
+
+def transform(df, filter_qc_codes = True, data_codes = None, baseflow_method = 'Boughton'):
+    '''
+    Transform normalized WISKI data into standardized format
+    '''
+    df = normalize(df)
+    if filter_qc_codes:
+        if data_codes is None:
+            data_codes = DATA_CODES
+        df = filter_quality_codes(df, data_codes)
     df = average_results(df)
     df = calculate_baseflow(df, method = baseflow_method)
     df['station_origin'] = 'wiski'
     return df
+
+
+
