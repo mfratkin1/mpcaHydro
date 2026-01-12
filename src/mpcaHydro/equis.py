@@ -180,10 +180,7 @@ def normalize_columns(df):
                    'RESULT_UNIT':'unit'
                })
 
-def replace_nondetects(df):
-    '''Replace non-detect results with 0 in Equis data.'''
-    df.loc[df['RESULT_NUMERIC'].isna(), 'RESULT_NUMERIC'] = 0
-    return df
+
 
 def normalize_timezone(df):
     '''Normalize datetime to UTC in Equis data.'''
@@ -232,15 +229,25 @@ def average_results(df):
         value=('value', 'mean')
     ).reset_index()
 
+def replace_nondetects(df):
+    '''Replace non-detect results with 0 in Equis data.'''
+    df.loc[df['value'].isna(), 'value'] = 0
+    return df
+
+def normalize(df):
+    '''Normalize Equis data: select relevant columns.'''
+    df = normalize_timezone(df)
+    df = normalize_columns(df)
+    df = convert_units(df)
+    df = map_constituents(df)
+    return df
+
 def transform(df):
     '''Transform Equis data: handle non-detects, convert units, map constituents.'''
     
+    df = normalize(df)
     df = replace_nondetects(df)
     if not df.empty:
-        df = normalize_timezone(df)
-        df = convert_units(df)
-        df = map_constituents(df)
-        df = normalize_columns(df)
         df = average_results(df)
     return df
 
