@@ -21,7 +21,7 @@ def init_db(db_path: str,reset: bool = False):
         create_analytics_tables(con)
 
         # Create views
-        update_views(con)
+        #update_views(con)
         
 
 def create_schemas(con: duckdb.DuckDBPyConnection):
@@ -81,7 +81,7 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
         '11507': 'WL'
     }
     df_wiski_params = pd.DataFrame(wiski_parametertype_map.items(), columns=['parametertype_id', 'constituent'])
-    con.execute("CREATE TABLE mappings.wiski_parametertype AS SELECT * FROM df_wiski_params")
+    con.execute("CREATE TABLE IF NOT EXISTS mappings.wiski_parametertype AS SELECT * FROM df_wiski_params")
 
     # EQuIS cas_rn -> constituent
     equis_casrn_map = {
@@ -100,20 +100,20 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
         '7664-41-7': 'NH3'
     }
     df_equis_cas = pd.DataFrame(equis_casrn_map.items(), columns=['cas_rn', 'constituent'])
-    con.execute("CREATE TABLE mappings.equis_casrn AS SELECT * FROM df_equis_cas")
+    con.execute("CREATE TABLE IF NOT EXISTS mappings.equis_casrn AS SELECT * FROM df_equis_cas")
 
     # Load station cross-reference from CSV
     # Assumes this script is run from a location where this relative path is valid
     xref_csv_path = Path(__file__).parent / 'data/WISKI_EQUIS_XREF.csv'
     if xref_csv_path.exists():
-        con.execute(f"CREATE TABLE mappings.station_xref AS SELECT * FROM read_csv_auto('{xref_csv_path.as_posix()}')")
+        con.execute(f"CREATE TABLE IF NOT EXISTS mappings.station_xref AS SELECT * FROM read_csv_auto('{xref_csv_path.as_posix()}')")
     else:
         print(f"Warning: WISKI_EQUIS_XREF.csv not found at {xref_csv_path}")
 
     # Load wiski_quality_codes from CSV
     wiski_qc_csv_path = Path(__file__).parent / 'data/WISKI_QUALITY_CODES.csv'
     if wiski_qc_csv_path.exists():
-        con.execute(f"CREATE TABLE mappings.wiski_quality_codes AS SELECT * FROM read_csv_auto('{wiski_qc_csv_path.as_posix()}')")
+        con.execute(f"CREATE TABLE IF NOT EXISTS mappings.wiski_quality_codes AS SELECT * FROM read_csv_auto('{wiski_qc_csv_path.as_posix()}')")
     else:
             print(f"Warning: WISKI_QUALITY_CODES.csv not found at {wiski_qc_csv_path}")
 
@@ -261,7 +261,7 @@ def create_staging_qc_count_view(con: duckdb.DuckDBPyConnection):
             w."Quality Code",
             w."Quality Code Name",
             COUNT(w."Quality Code") AS count
-        FROM staging.wiski w 
+        FROM staging.wiski_raw w 
         GROUP BY
             w."Quality Code",w."Quality Code Name",w.parametertype_name, w.station_no
                 );
@@ -290,7 +290,7 @@ def create_outlet_observations_view(con: duckdb.DuckDBPyConnection):
     Create a view in analytics schema that links observations to model reaches via outlets.
     """
     con.execute("""
-    CREATE VIEW analytics.outlet_observations AS 
+    CREATE OR REPLACE VIEW analytics.outlet_observations AS 
     SELECT
         o.datetime,
         os.outlet_id,
@@ -391,7 +391,27 @@ def create_constituent_summary_report(con: duckdb.DuckDBPyConnection):
             # ORDER BY
             # constituent,sample_count;''')
 
+def create_outlet_summary_report(con: duckdb.DuckDBPyConnection):
+    con.execute("""
+        CREATE VIEW reports.outlet_constituent_summary AS
+    SELECT
+        outlet_id,
+        constituent,
+        count_star() AS sample_count,
+        avg("value") AS average_value,
+        min("value") AS min_value,
+        max("value") AS max_value,
+        "year"(min(datetime)) AS start_date,
+        "year"(max(datetime)) AS end_date
+    FROM
+        analytics.outlet_observations
+    GROUP BY
+        constituent,
+        outlet_id
+    """)
 
+    
+       
 def drop_station_id(con: duckdb.DuckDBPyConnection, station_id: str,station_origin: str):
     """
     Drop all data for a specific station from staging and analytics schemas.
@@ -406,11 +426,13 @@ def update_views(con: duckdb.DuckDBPyConnection):
     """
     Update all views in the database.
     """
+    create_staging_qc_count_view(con)
     create_combined_observations_view(con)
     create_constituent_summary_report(con)
     create_outlet_observations_view(con)
     create_outlet_observations_with_flow_view(con)
-
+    create_outlet_summary_report(con)
+    
 def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """
     Returns a DuckDB connection to the given database path.
