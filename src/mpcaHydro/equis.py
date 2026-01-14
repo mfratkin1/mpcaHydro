@@ -164,20 +164,22 @@ def as_utc_offset(naive_dt: Union[datetime, str], tz_label: str, target_offset: 
     aware_src = naive.replace(tzinfo=src_tz)
 
     # convert the instant to fixed UTC-6
-    return aware_src.astimezone(target_offset)
+    return aware_src.astimezone(target_offset).tz_localize(None)
 
 
 def normalize_columns(df):
     '''Select relevant columns from Equis data.'''
     return df[['SYS_LOC_CODE',
+               'constituent',
+               'CAS_RN',
                'datetime',
                'RESULT_NUMERIC',
                'RESULT_UNIT',
-               'constituent'
                ]].rename(columns={
                    'SYS_LOC_CODE':'station_id',
                    'RESULT_NUMERIC':'value',
-                   'RESULT_UNIT':'unit'
+                   'RESULT_UNIT':'unit',
+                   'CAS_RN':'cas_rn'
                })
 
 
@@ -191,27 +193,27 @@ def normalize_timezone(df):
         except Exception:
             return pd.NaT
 
-    df['datetime'] = df.apply(_conv, axis=1)
+    df.loc[:,'datetime'] = df.apply(_conv, axis=1)
     return df
 
 def convert_units(df):
     '''Convert units in Equis data to standard units.'''
     # Convert ug/L to mg/L
-    df['RESULT_UNIT'] = df['RESULT_UNIT'].str.lower()
+    df['unit'] = df['unit'].str.lower()
 
-    mask_ugL = df['RESULT_UNIT'] == 'ug/l'
-    df.loc[mask_ugL, 'RESULT_NUMERIC'] = df.loc[mask_ugL, 'RESULT_NUMERIC'] / 1000
-    df.loc[mask_ugL, 'RESULT_UNIT'] = 'mg/l'
+    mask_ugL = df['unit'] == 'ug/l'
+    df.loc[mask_ugL, 'value'] = df.loc[mask_ugL, 'value'] / 1000
+    df.loc[mask_ugL, 'unit'] = 'mg/l'
 
     # Convert mg/g to mg/L (assuming density of 1 g/mL)
-    mask_mgg = df['RESULT_UNIT'] == 'mg/g'
-    df.loc[mask_mgg, 'RESULT_NUMERIC'] = df.loc[mask_mgg, 'RESULT_NUMERIC'] * 1000
-    df.loc[mask_mgg, 'RESULT_UNIT'] = 'mg/l'
+    mask_mgg = df['unit'] == 'mg/g'
+    df.loc[mask_mgg, 'value'] = df.loc[mask_mgg, 'value'] * 1000
+    df.loc[mask_mgg, 'unit'] = 'mg/l'
 
     # Convert deg C to degF
-    mask_degC = df['RESULT_UNIT'].isin(['deg c', 'degc'])
-    df.loc[mask_degC, 'RESULT_NUMERIC'] = (df.loc[mask_degC, 'RESULT_NUMERIC'] * 9/5) + 32
-    df.loc[mask_degC, 'RESULT_UNIT'] = 'degf'
+    mask_degC = df['unit'].isin(['deg c', 'degc'])
+    df.loc[mask_degC, 'value'] = (df.loc[mask_degC, 'value'] * 9/5) + 32
+    df.loc[mask_degC, 'unit'] = 'degf'
 
     return df
 
@@ -236,10 +238,10 @@ def replace_nondetects(df):
 
 def normalize(df):
     '''Normalize Equis data: select relevant columns.'''
+    df = map_constituents(df)
     df = normalize_timezone(df)
     df = normalize_columns(df)
     df = convert_units(df)
-    df = map_constituents(df)
     return df
 
 def transform(df):

@@ -157,7 +157,7 @@ def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 4, as_jso
             end = end_year
         df = pywisk.get_ts(ts_id,start_date = f'{start}-01-01',end_date = f'{end}-12-31',as_json = as_json)
         if not df.empty: frames.append(df)
-        df.index = pd.to_datetime(df['Timestamp'])
+        df['Timestamp'] = pd.to_datetime(df['Timestamp']).dt.tz_localize(None)
         time.sleep(.1)   
     return pd.concat(frames)
 
@@ -195,6 +195,8 @@ def total_phosphorous(station_nos,start_year = 1996,end_year = 2030):
 
 def tkn(station_nos,start_year = 1996,end_year = 2030):
     return _download('TKN',station_nos,start_year,end_year)
+
+
 
 
 
@@ -242,8 +244,8 @@ def filter_quality_codes(df, data_codes):
     return df.loc[df['quality_code'].isin(data_codes)]
 
 def average_results(df):
-    df['datetime'] = pd.to_datetime(df.loc[:,'datetime'])
-    df['datetime'] = df['datetime'].dt.round('h')
+    #df['datetime'] = pd.to_datetime(df.loc[:,'datetime'])
+    df.loc[:,'datetime'] = df.loc[:,'datetime'].dt.round('h')
     return df.groupby(['station_id', 'datetime', 'constituent', 'unit']).agg(value=('value', 'mean')).reset_index()
     # Convert units
 
@@ -299,6 +301,7 @@ def transform(df, filter_qc_codes = True, data_codes = None, baseflow_method = '
     df = average_results(df)
     df = calculate_baseflow(df, method = baseflow_method)
     df['station_origin'] = 'wiski'
+    #df.set_index('datetime',inplace=True)
     return df
 
 
