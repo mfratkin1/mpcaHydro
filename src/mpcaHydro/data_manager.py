@@ -10,15 +10,14 @@ import pandas as pd
 from pathlib import Path
 from mpcaHydro import etlSWD
 from mpcaHydro import equis, wiski, warehouse
+from mpcaHydro import xref
+from mpcaHydro import outlets
+from mpcaHydro.reports import reportManager
 import duckdb
-
-
-WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'data/WISKI_EQUIS_XREF.csv')
-#WISKI_EQUIS_XREF = pd.read_csv('C:/Users/mfratki/Documents/GitHub/hspf_tools/WISKI_EQUIS_XREF.csv')
 
 AGG_DEFAULTS = {'cfs':'mean',
                 'mg/l':'mean',
-                'degF': 'mean',
+                'degf': 'mean',
                 'lb':'sum'}
 
 UNIT_DEFAULTS = {'Q': 'cfs',
@@ -28,29 +27,15 @@ UNIT_DEFAULTS = {'Q': 'cfs',
                  'OP' : 'mg/l',
                  'TKN': 'mg/l',
                  'N'  : 'mg/l',
-                 'WT' : 'degF',
+                 'WT' : 'degf',
                  'WL' : 'ft'}
 
-def are_lists_identical(nested_list):
-    # Sort each sublist
-    sorted_sublists = [sorted(sublist) for sublist in nested_list]
-    # Compare all sublists to the first one
-    return all(sublist == sorted_sublists[0] for sublist in sorted_sublists)                                                                                               
 
-def construct_database(folderpath):
-    folderpath = Path(folderpath)
-    db_path = folderpath.joinpath('observations.duckdb').as_posix()
-    with duckdb.connect(db_path) as con:
-        con.execute("DROP TABLE IF EXISTS observations")
-        datafiles = folderpath.joinpath('*.csv').as_posix()
-        query = '''
-        CREATE TABLE observations AS SELECT * 
-        FROM
-        read_csv_auto(?,
-                        union_by_name = true);
-        
-        '''
-        con.execute(query,[datafiles])
+def validate_constituent(constituent):
+    assert constituent in ['Q','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
+
+def validate_unit(unit):
+    assert(unit in ['mg/l','lb','cfs','degF'])
 
 
 def build_warehouse(folderpath):
@@ -86,8 +71,14 @@ class dataManager():
         self.data = {}
         self.folderpath = Path(folderpath)
         self.db_path = self.folderpath.joinpath('observations.duckdb')
+        
         self.oracle_user = oracle_user
         self.oracle_password = oracle_password
+        warehouse.init_db(self.db_path,reset = False)
+        self.xref = xref
+        self.outlets = outlets
+        self.reports = reportManager(self.db_path)
+
     
     def connect_to_oracle(self):
         assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
@@ -99,295 +90,139 @@ class dataManager():
         else:
             return False
         
-    def _reconstruct_database(self):
-        construct_database(self.folderpath)
-    
     def _build_warehouse(self):
         build_warehouse(self.folderpath)
-        
-    def constituent_summary(self,constituents = None):
-        with duckdb.connect(self.db_path) as con:
-            if constituents is None:
-                constituents = con.query('''
-                                        SELECT DISTINCT
-                                        constituent
-                                        FROM observations''').to_df()['constituent'].to_list()
 
-            query = '''
-            SELECT
-            station_id,
-            station_origin,
-            constituent,
-            COUNT(*) AS sample_count,
-            year(MIN(datetime)) AS start_date,
-            year(MAX(datetime)) AS end_date
-            FROM
-            observations
-            WHERE
-            constituent in (SELECT UNNEST(?))
-            GROUP BY
-            constituent,station_id,station_origin
-            ORDER BY
-            constituent,sample_count;'''
+    def download_station_data(self,station_id,station_origin,overwrite=True,to_csv = False,filter_qc_codes = True, start_year = 1996, end_year = 2030,baseflow_method = 'Boughton'):
+        '''
+        Method to download data for a specific station and load it into the warehouse.
         
-            df = con.execute(query,[constituents]).fetch_df()
+        :param self: Description
+        :param station_id: Station identifier
+        :param station_origin: source of station data: wiski, equis, or swd
+        :param overwrite: Whether to overwrite existing data
+        :param to_csv: Whether to export data to CSV
+        :param filter_qc_codes: Whether to filter quality control codes
+        :param start_year: Start year for data download
+        :param end_year: End year for data download
+        :param baseflow_method: Method for baseflow calculation
+        '''
+        with duckdb.connect(self.db_path,read_only=False) as con:
+            if overwrite:
+                warehouse.drop_station_id(con,station_id,station_origin)
+                warehouse.update_views(con)
+
+            if station_origin == 'wiski':
+                df = wiski.download([station_id],start_year = start_year, end_year = end_year)
+                warehouse.load_df_to_staging(con,df, 'wiski_raw', replace = overwrite)
+                warehouse.load_df_to_analytics(con,wiski.transform(df,filter_qc_codes = filter_qc_codes,baseflow_method = baseflow_method),'wiski') # method includes normalization
+                
+            elif station_origin == 'equis':
+                assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
+                df = equis.download([station_id])
+                warehouse.load_df_to_staging(con,df, 'equis_raw',replace = overwrite)
+                warehouse.load_df_to_analytics(con,equis.transform(df),'equis')
+
+            elif station_origin == 'swd':
+                df = etlSWD.download(station_id)
+                warehouse.load_df_to_staging(con,df, 'swd_raw', replace = overwrite)
+                warehouse.load_df_to_analytics(con,etlSWD.transform(df),'swd')
+            else:
+                raise ValueError('station_origin must be wiski, equis, or swd')    
+    
+        with duckdb.connect(self.db_path,read_only=False) as con:
+            warehouse.update_views(con)
+
+        if to_csv:
+            self.to_csv(station_id)
+            
+        return df
+    
+    def get_outlets(self):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM outlets.station_reach_pairs
+            ORDER BY outlet_id'''
+            df = con.execute(query).fetch_df()
+        return df
+    def get_station_ids(self,station_origin = None):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            if station_origin is None:
+                query = '''
+                SELECT DISTINCT station_id, station_origin
+                FROM analytics.observations'''
+                df = con.execute(query).fetch_df()
+            else:
+                query = '''
+                SELECT DISTINCT station_id
+                FROM analytics.observations
+                WHERE station_origin = ?'''
+                df = con.execute(query,[station_origin]).fetch_df()
+        
+        return df['station_id'].to_list()
+    
+
+    def get_station_data(self,station_ids,constituent,agg_period = None):
+        
+
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM analytics.observations
+            WHERE station_id IN ? AND constituent = ?'''
+            df = con.execute(query,[station_ids,constituent]).fetch_df()
+        
+        unit = UNIT_DEFAULTS[constituent]
+        agg_func = AGG_DEFAULTS[unit]
+
+        df.set_index('datetime',inplace=True)
+        df.attrs['unit'] = unit
+        df.attrs['constituent'] = constituent
+        if agg_period is not None:
+            df = df[['value']].resample(agg_period).agg(agg_func)
+            df.attrs['agg_period'] = agg_period
+
+        df.rename(columns={'value': 'observed'}, inplace=True) 
+        return df
+    
+    def get_outlet_data(self,outlet_id,constituent,agg_period = 'D'):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM analytics.outlet_observations_with_flow
+            WHERE outlet_id = ? AND constituent = ?'''
+            df = con.execute(query,[outlet_id,constituent]).fetch_df()    
+
+        unit = UNIT_DEFAULTS[constituent]
+        agg_func = AGG_DEFAULTS[unit]
+
+        df.set_index('datetime',inplace=True)
+        df.attrs['unit'] = unit
+        df.attrs['constituent'] = constituent
+        if agg_period is not None:
+            df = df[['value','flow_value','baseflow_value']].resample(agg_period).agg(agg_func)
+            df.attrs['agg_period'] = agg_period
+
+        df.rename(columns={'value': 'observed',
+                           'flow_value': 'observed_flow',
+                           'baseflow_value': 'observed_baseflow'}, inplace=True) 
         return df
 
-    def get_wiski_stations(self):
-        return list(WISKI_EQUIS_XREF['WISKI_STATION_NO'].unique())
     
-    def get_equis_stations(self):
-        return list(WISKI_EQUIS_XREF['EQUIS_STATION_ID'].unique())
-    
-    def wiski_equis_alias(self,wiski_station_id):
-        equis_ids =  list(set(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WISKI_STATION_NO'] == wiski_station_id,'WISKI_EQUIS_ID'].to_list()))
-        equis_ids = [equis_id for equis_id in equis_ids if not pd.isna(equis_id)]
-        if len(equis_ids) == 0:
-            return []
-        elif len(equis_ids) > 1:
-            print(f'Too Many Equis Stations for {wiski_station_id}')
-            raise 
-        else:
-            return equis_ids[0]
 
-    def wiski_equis_associations(self,wiski_station_id):
-        equis_ids =  list(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WISKI_STATION_NO'] == wiski_station_id,'EQUIS_STATION_ID'].unique())
-        equis_ids =  [equis_id for equis_id in equis_ids if not pd.isna(equis_id)]
-        if len(equis_ids) == 0:
-            return []
-        else:
-            return equis_ids
-        
-    def equis_wiski_associations(self,equis_station_id):
-        wiski_ids = list(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['EQUIS_STATION_ID'] == equis_station_id,'WISKI_STATION_NO'].unique())
-        wiski_ids = [wiski_id for wiski_id in wiski_ids if not pd.isna(wiski_id)]
-        if len(wiski_ids) == 0:
-            return []
-        else:
-            return wiski_ids
-        
-    def equis_wiski_alias(self,equis_station_id):
-        wiski_ids =  list(set(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WISKI_EQUIS_ID'] == equis_station_id,'WISKI_STATION_NO'].to_list()))
-        wiski_ids = [wiski_id for wiski_id in wiski_ids if not pd.isna(wiski_id)]
-        if len(wiski_ids) == 0:
-            return []
-        elif len(wiski_ids) > 1:
-            print(f'Too Many WISKI Stations for {equis_station_id}')
-            raise 
-        else:
-            return wiski_ids[0]
-
-    def _equis_wiski_associations(self,equis_station_ids):
-        wiski_stations = [self.equis_wiski_associations(equis_station_id) for equis_station_id in equis_station_ids]
-        if are_lists_identical(wiski_stations):
-            return wiski_stations[0]
-        else:
-            return []
-            
-    def _stations_by_wid(self,wid_no,station_origin):
-        if station_origin in ['wiski','wplmn']:
-            station_col = 'WISKI_STATION_NO'
-        elif station_origin in ['equis','swd']:
-            station_col = 'EQUIS_STATION_ID'
-        else:
-            raise
-            
-        return list(WISKI_EQUIS_XREF.loc[WISKI_EQUIS_XREF['WID'] == wid_no,station_col].unique())
-
-    
-    def download_stations_by_wid(self, wid_no,station_origin, folderpath = None, overwrite = False):
-
-        station_ids = self._station_by_wid(wid_no,station_origin)
-        
-        if not station_ids.empty:
-            for _, row in station_ids.iterrows():
-                self.download_station_data(row['station_id'],station_origin, folderpath, overwrite)
-
-    def _download_station_data(self,station_id,station_origin,overwrite=False): 
-        assert(station_origin in ['wiski','equis','swd','wplmn'])
-        if station_origin == 'wiski':
-            self.download_station_data(station_id,'wiski',overwrite = overwrite)
-        elif station_origin == 'wplmn':
-            self.download_station_data(station_id,'wplmn',overwrite = overwrite)
-        elif station_origin == 'swd':
-            self.download_station_data(station_id,'swd',overwrite = overwrite)
-        else:
-            self.download_station_data(station_id,'equis',overwrite = overwrite)
-
-
-       
-
-    def download_station_data(self,station_id,station_origin,start_year = 1996, end_year = 2030,folderpath=None,overwrite = False,baseflow_method = 'Boughton'):
-        assert(station_origin in ['wiski','equis','swd','wplmn'])
-        station_id = str(station_id)
-        save_name = station_id
-        if station_origin == 'wplmn':
-            save_name = station_id + '_wplmn'
-        
+    def to_csv(self,station_id,folderpath = None):
         if folderpath is None:
             folderpath = self.folderpath
         else:
             folderpath = Path(folderpath)
-        
-        
-        if (folderpath.joinpath(save_name + '.csv').exists()) & (not overwrite):
-            print (f'{station_id} data already downloaded')
-            return
-        
-        if station_origin == 'wiski':
-            data = wiski.transform(wiski.download([station_id],wplmn=False, baseflow_method = baseflow_method))
-        elif station_origin == 'swd':
-            data = etlSWD.download(station_id)
-        elif station_origin == 'equis':
-            assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
-            data = equis.transform(equis.download([station_id]))
+        df = self._load(station_id)
+        if len(df) > 0:
+            df.to_csv(folderpath.joinpath(station_id + '.csv'))
         else:
-            data = wiski.transform(wiski.download([station_id],wplmn=True, baseflow_method = baseflow_method))
+            print(f'No {station_id} calibration data available at Station {station_id}')
         
-
-       
-        
-        if len(data) > 0:
-            data.to_csv(folderpath.joinpath(save_name + '.csv'))
-            self.data[station_id] = data
-        else:
-            print(f'No {station_origin} calibration cata available at Station {station_id}')
-        
-    def _load(self,station_id):
-        with duckdb.connect(self.db_path) as con:
-            query = '''
-            SELECT *
-            FROM analytics.observations
-            WHERE station_id = ?'''
-            df = con.execute(query,[station_id]).fetch_df()
-            df.set_index('datetime',inplace=True)
-            self.data[station_id] = df
-            return df
-
-    def _load2(self,station_id):
-        df =  pd.read_csv(self.folderpath.joinpath(station_id + '.csv'), 
-                          index_col='datetime', 
-                          parse_dates=['datetime'], 
-                          #usecols=['Ts Date','Station number','variable', 'value','reach_id'],
-                          dtype={'station_id': str, 'value': float, 'variable': str,'constituent':str,'unit':str})
-        self.data[station_id] = df
-        return df
-    
-    def load(self,station_id):
-        try:
-            df = self.data[station_id]
-        except:
-            df = self._load(station_id)
-        return df
-    
-    def info(self,constituent):
-        return pd.concat([self._load(file.stem) for file in self.folderpath.iterdir() if file.suffix == '.csv'])[['station_id','constituent','value']].groupby(by = ['station_id','constituent']).count()
-        
-    def get_wplmn_data(self,station_id,constituent,unit = 'mg/l', agg_period = 'YE', samples_only = True):
-        
-        assert constituent in ['Q','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
-        station_id = station_id + '_wplmn'
-        dfsub = self._load(station_id)
-        
-        if samples_only:
-            dfsub = dfsub.loc[dfsub['quality_id'] == 3]
-        agg_func = 'mean'
-        
-        dfsub = dfsub.loc[(dfsub['constituent'] == constituent) & 
-                              (dfsub['unit'] == unit),
-                              ['value','station_origin']]
-
-        
-        df = dfsub[['value']].resample(agg_period).agg(agg_func)
-        
-        if df.empty:
-            dfsub = df
-        else:
-            
-            df['station_origin'] = dfsub['station_origin'].iloc[0]
-            
-            #if (constituent == 'TSS') & (unit == 'lb'): #convert TSS from lbs to us tons
-            #    dfsub['value'] = dfsub['value']/2000
-    
-            #dfsub = dfsub.resample('H').mean().dropna()
-        
-        df.attrs['unit'] = unit
-        df.attrs['constituent'] = constituent
-        return df['value'].to_frame().dropna()
-    
-    def get_data(self,station_id,constituent,agg_period = 'D'):
-        return self._get_data([station_id],constituent,agg_period)
-    
-    def _get_data(self,station_ids,constituent,agg_period = 'D',tz_offset = '-6'):
-        '''
-        
-        Returns the processed observational data associated with the calibration specific id. 
-            
-
-        Parameters
-        ----------
-        station_id : STR
-            Station ID as a string
-        constituent : TYPE
-            Constituent abbreviation used for calibration. Valid options:
-                'Q',
-                'TSS',
-                'TP',
-                'OP',
-                'TKN',
-                'N',
-                'WT',
-                'DO',
-                'WL']
-        unit : TYPE, optional
-            Units of data. The default is 'mg/l'.
-        sample_flag : TYPE, optional
-            For WPLMN data this flag determines modeled loads are returned. The default is False.
-
-        Returns
-        -------
-        dfsub : Pands.Series
-            Pandas series of data. Note that no metadata is returned.
-
-        '''
-        
-        assert constituent in ['Q','QB','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
-        
-        unit = UNIT_DEFAULTS[constituent]
-        agg_func = AGG_DEFAULTS[unit]
-            
-        dfsub = pd.concat([self.load(station_id) for station_id in station_ids]) # Check cache
-        dfsub.index = dfsub.index.tz_localize(None) # Drop timezone info
-        #dfsub.set_index('datetime',drop=True,inplace=True)
-        dfsub.rename(columns={'source':'station_origin'},inplace=True)
-        dfsub = dfsub.loc[(dfsub['constituent'] == constituent) &
-                              (dfsub['unit'] == unit),
-                              ['value','station_origin']]   
-        
-        df = dfsub[['value']].resample(agg_period).agg(agg_func)
-        df.attrs['unit'] = unit
-        df.attrs['constituent'] = constituent
-        
-        if df.empty:
-            
-            return df
-        else:
-            
-            df['station_origin'] = dfsub['station_origin'].iloc[0]
-
-
-        # convert to desired timzone before stripping timezone information.
-        #df.index.tz_convert('UTC-06:00').tz_localize(None)
-    
-        return df['value'].to_frame().dropna()
-    
-
-def validate_constituent(constituent):
-    assert constituent in ['Q','TSS','TP','OP','TKN','N','WT','DO','WL','CHLA']
-
-def validate_unit(unit):
-    assert(unit in ['mg/l','lb','cfs','degF'])
-
+        df.to_csv(folderpath.joinpath(station_id + '.csv'))
 
 
 # class database():

@@ -90,9 +90,9 @@ def outlet_stations(model_name):
 def _split_opnids(opnids: list):
     return [int(float(j)) for i in opnids for j in i]
 
-def connect(db_path):
+def connect(db_path, read_only=True):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(db_path)
+    return duckdb.connect(db_path,read_only=read_only)
 
 
 def init_db(db_path: str,reset: bool = False):
@@ -149,6 +149,53 @@ def get_outlets_by_station(station_id: str, station_origin: str):
         """,
         [station_id, station_origin]).fetchdf()
     return df
+
+
+
+class OutletGateway:
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+        self.db_path = DB_PATH
+        self.modl_db = get_model_db(model_name)
+
+    # Legacy methods to access functions
+    def wplmn_station_opnids(self):
+        return wplmn_station_opnids(self.model_name)
+
+    def wiski_station_opnids(self):
+        return wiski_station_opnids(self.model_name)
+
+    def equis_station_opnids(self):
+        return equis_station_opnids(self.model_name)
+
+    def station_opnids(self):
+        return station_opnids(self.model_name)
+
+    def equis_stations(self):
+        return equis_stations(self.model_name)
+
+    def wiski_stations(self):
+        return wiski_stations(self.model_name)
+
+    def wplmn_stations(self):
+        return wplmn_stations(self.model_name)
+
+    def outlets(self):
+        return outlets(self.model_name)
+
+    def outlet_stations(self):
+        return outlet_stations(self.model_name)
+
+    # Accessors for outlets
+    def get_outlets(self):
+        return get_outlets_by_model(self.model_name)
+
+    def get_outlets_by_reach(self, reach_id: int):
+        return get_outlets_by_reach(reach_id, self.model_name)
+
+    def get_outlets_by_station(self, station_id: str, station_origin: str):
+        assert(station_id in self.wiski_stations() + self.equis_stations()), f"Station ID {station_id} not found in model {self.model_name}"
+        return get_outlets_by_station(station_id, station_origin)
 
 # constructors:
 def build_outlet_db(db_path: str = None):
