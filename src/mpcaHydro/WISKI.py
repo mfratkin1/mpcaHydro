@@ -19,11 +19,8 @@ PARAMETERTYPE_MAP ={'11522': 'TP',
                     '11504': 'WT',
                     '11533': 'DO',
                     '11507':'WL'}
-#STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*','5034' ,'5035','5005', '5004','5014' ,'5015','5024'  ,'5025','5044' ,'5045']
-STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*']
 
 DATA_CODES = [1,3,10,12,15,20,29,30,31,32,34,45,46,47,48,49]
-
 
 TS_NAME_SELECTOR = {'Q':{'Internal':{'daily':'20.Day.Mean.Archive',
                                      'unit': '15.Rated'},
@@ -62,7 +59,8 @@ TS_NAME_SELECTOR = {'Q':{'Internal':{'daily':'20.Day.Mean.Archive',
                         'External': {'daily': '20.Day.Mean',
                                     'unit': '08.Provisional.Edited'}}}
 
-
+#STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*','5034' ,'5035','5005', '5004','5014' ,'5015','5024'  ,'5025','5044' ,'5045']
+STATIONPARAMETER_NOS = ['262*','450*','451*','863*','866*']
 
 CONSTITUENT_NAME_NO = {'Q'  :['262*'],#,'263'],
                        'WT' :['450*', '451*'], # '450.42','451.42'],
@@ -73,6 +71,13 @@ CONSTITUENT_NAME_NO = {'Q'  :['262*'],#,'263'],
                        'TSS':None,
                        'N'  :None,
                        'TKN':None}
+
+STATIONPARAMETER_NOS_MAP = {'262*':'Q',
+                            '450*':'WT',
+                            '451*':'WT',
+                            '863*':'OP',
+                            '866*':'DO',
+                            '811*':'TRB'}
 
 CONSTITUENT_NAME_NO_WPLMN = {'Q'  :['262*'],#,'263'],
                        'WT' :['450*', '451*'], # '450.42','451.42'],
@@ -90,6 +95,38 @@ def test_connection():
     Test connection to WISKI database.
     '''
     return pywisk.test_connection()
+
+def info(station_ids: list,constituent = None):
+    '''
+    Fetch metadata for given station IDs from WISKI database using the KISTERS API.
+    '''
+    if constituent is not None:
+        stationparameter_nos = CONSTITUENT_NAME_NO[constituent]
+    else:
+        stationparameter_nos = STATIONPARAMETER_NOS
+    
+    df = pywisk.get_ts_ids(station_nos = station_ids,
+                            stationparameter_no = stationparameter_nos,
+                            ts_name = ['15.Rated','09.Archive','08.Provisional.Edited'])
+
+    df = normalize_columns(df)
+
+    # rows = []
+    # for station_id in df['station_id'].unique():            
+    #     for constituent in df.loc[df['station_id'] == station_id,'constituent'].unique():
+    #         df_station_constituent = df.loc[(df['station_id'] == station_id) & (df['constituent'] == constituent) & df['ts_name'].isin(['15.Rated','09.Archive','08.Provisional.Edited'])]
+    #         if not df_station_constituent.empty:
+    #             if station_id.lower().startswith('e'):
+    #                 ts_names = TS_NAME_SELECTOR[constituent]['External']['unit']
+    #             else:
+    #                 ts_names = TS_NAME_SELECTOR[constituent]['Internal']['unit']
+    #             rows.append(df_station_constituent.loc[df_station_constituent['ts_name'] == ts_names,:])
+ 
+    return df
+
+
+
+
 
 def download(station_ids: list, start_year: int = 1996, end_year: int = 2030,wplmn: bool = False):
     '''
@@ -219,13 +256,28 @@ def convert_units(df):
     return df
 
 
+def map_constituents(df):
+    '''
+    Map stationparameter_no to constituent names
+    '''
+    def map_values(value):
+        for key, replacement in STATIONPARAMETER_NOS_MAP.items():
+            if value.startswith(key.rstrip('*')):  # Match prefix without the wildcard '*'
+                return replacement
+        return value  # If no match, return the original value
+
+    df['constituent'] = df['stationparameter_no'].apply(map_values)
+    return df
+
 def normalize_columns(df):
     '''
     Normalize column names and units
     '''
     # Map parameter numbers to constituent names
-    df['constituent'] = df['parametertype_id'].map(PARAMETERTYPE_MAP)
+    #df['constituent'] = df['stationparameter_no'].map(STATIONPARAMETER_NOS_MAP,regex=True)
     
+    df = map_constituents(df)
+
     df.rename(columns={
         'station_no':'station_id',
         'Timestamp':'datetime',
