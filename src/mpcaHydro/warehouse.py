@@ -18,11 +18,14 @@ def init_db(db_path: str,reset: bool = False):
         # Create tables
         create_outlets_tables(con)
         create_mapping_tables(con)
+        create_staging_tables(con)
         create_analytics_tables(con)
+        
 
         # Create views
-        #update_views(con)
-        
+        update_views(con)
+
+
 
 def create_schemas(con: duckdb.DuckDBPyConnection):
     """
@@ -33,6 +36,100 @@ def create_schemas(con: duckdb.DuckDBPyConnection):
     con.execute("CREATE SCHEMA IF NOT EXISTS reports")
     con.execute("CREATE SCHEMA IF NOT EXISTS outlets")
     con.execute("CREATE SCHEMA IF NOT EXISTS mappings")
+
+def create_staging_tables(con: duckdb.DuckDBPyConnection):
+    '''
+    Create necessary tables in the staging schema. These were copied directly from database DDL. Would need to be updated if sources change.
+    '''
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS staging.equis(
+                LATITUDE DOUBLE,
+                LONGITUDE DOUBLE,
+                WID_LIST VARCHAR,
+                SAMPLE_METHOD VARCHAR,
+                SAMPLE_REMARK VARCHAR,
+                FACILITY_ID BIGINT,
+                FACILITY_NAME VARCHAR,
+                FACILITY_TYPE VARCHAR,
+                SYS_LOC_CODE VARCHAR,
+                LOC_NAME VARCHAR,
+                LOC_TYPE VARCHAR,
+                LOC_TYPE_2 VARCHAR,
+                TASK_CODE VARCHAR,
+                SAMPLE_ID BIGINT,
+                SYS_SAMPLE_CODE VARCHAR,
+                TEST_ID BIGINT,
+                ANALYTE_TYPE VARCHAR,
+                ANALYTE_TYPE_DESC VARCHAR,
+                ANALYTIC_METHOD VARCHAR,
+                PREFERRED_NAME VARCHAR,
+                PARAMETER VARCHAR,
+                CAS_RN VARCHAR,
+                CHEMICAL_NAME VARCHAR,
+                GTLT VARCHAR,
+                RESULT_TEXT VARCHAR,
+                RESULT_NUMERIC DOUBLE,
+                RESULT_UNIT VARCHAR,
+                STAT_TYPE INTEGER,
+                VALUE_TYPE VARCHAR,
+                DETECT_FLAG VARCHAR,
+                DETECT_DESC VARCHAR,
+                RESULT_REMARK VARCHAR,
+                RESULT_TYPE_CODE VARCHAR,
+                METHOD_DETECTION_LIMIT VARCHAR,
+                REPORTING_DETECTION_LIMIT VARCHAR,
+                QUANTITATION_LIMIT INTEGER,
+                LAB_QUALIFIERS VARCHAR,
+                INTERPRETED_QUALIFIERS VARCHAR,
+                REPORTABLE_RESULT VARCHAR,
+                APPROVAL_CODE VARCHAR,
+                SENSITIVE_NOTPUBLIC VARCHAR,
+                TEST_TYPE VARCHAR,
+                DILUTION_FACTOR DOUBLE,
+                FRACTION VARCHAR,
+                BASIS VARCHAR,
+                TEMP_BASIS VARCHAR,
+                TEST_REMARK VARCHAR,
+                ANALYSIS_DATE_TIME TIMESTAMP_NS,
+                ANALYSIS_DATE VARCHAR,
+                ANALYSIS_TIME VARCHAR,
+                ANALYSIS_DATE_TIMEZONE VARCHAR,
+                COMPANY_NAME VARCHAR,
+                LAB_NAME_CODE VARCHAR,
+                LAB_SAMPLE_ID VARCHAR,
+                SAMPLE_TYPE_GROUP VARCHAR,
+                SAMPLE_TYPE_CODE VARCHAR,
+                SAMPLE_TYPE_DESC VARCHAR,
+                MEDIUM_CODE VARCHAR,
+                MATRIX_CODE VARCHAR,
+                START_DEPTH DOUBLE,
+                DEPTH_UNIT VARCHAR,
+                SAMPLE_DATE_TIME TIMESTAMP_NS,
+                SAMPLE_DATE VARCHAR,
+                SAMPLE_TIME VARCHAR,
+                SAMPLE_DATE_TIMEZONE VARCHAR,
+                EBATCH DOUBLE);
+    """)
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS staging.wiski(
+                "Timestamp" VARCHAR,
+                "Value" DOUBLE,
+                "Quality Code" BIGINT,
+                "Quality Code Name" VARCHAR,
+                ts_unitsymbol VARCHAR,
+                ts_name VARCHAR,
+                ts_id VARCHAR,
+                station_no VARCHAR,
+                station_name VARCHAR,
+                station_latitude VARCHAR,
+                station_longitude VARCHAR,
+                parametertype_id VARCHAR,
+                parametertype_name VARCHAR,
+                stationparameter_no VARCHAR,
+                stationparameter_name VARCHAR,
+                wplmn_flag BIGINT);
+    """)
+
 
 def create_analytics_tables(con: duckdb.DuckDBPyConnection):
     """
@@ -119,62 +216,11 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
 
 def create_outlets_tables(con: duckdb.DuckDBPyConnection):
     """
-    Create tables in the outlets schema to define outlet-station-reach relationships.
+    Create tables in the outlets schema to define outlet-station-reach relationships.Copies from outlets module.
     """
-    con.execute("""-- schema.sql
-            -- Simple 3-table design to manage associations between model reaches and observation stations via outlets.
-            -- Compatible with DuckDB and SQLite.
-
-            -- Table 1: outlets
-            -- Represents a logical grouping that ties stations and reaches together.
-            CREATE TABLE IF NOT EXISTS outlets.outlets (
-            outlet_id TEXT PRIMARY KEY,
-            repository_name TEXT NOT NULL,
-            outlet_name TEXT,
-            notes TEXT             -- optional: general notes about the outlet grouping
-            );
-
-            -- Table 2: outlet_stations
-            -- One-to-many: outlet -> stations
-            CREATE TABLE IF NOT EXISTS outlets.outlet_stations (
-            outlet_id TEXT NOT NULL,
-            station_id TEXT NOT NULL,
-            station_origin TEXT NOT NULL,       -- e.g., 'wiski', 'equis'
-            repository_name TEXT NOT NULL,  -- repository model the station is physically located in
-            true_opnid TEXT NOT NULL,           -- The specific reach the station physically sits on (optional)
-            comments TEXT,             -- Per-station comments, issues, etc.
-            CONSTRAINT uq_station_origin UNIQUE (station_id, station_origin),
-            FOREIGN KEY (outlet_id) REFERENCES outlets.outlets(outlet_id)
-            );
-
-            -- Table 3: outlet_reaches
-            -- One-to-many: outlet -> reaches
-            -- A reach can appear in multiple outlets, enabling many-to-many overall.
-            CREATE TABLE IF NOT EXISTS outlets.outlet_reaches (
-            outlet_id TEXT NOT NULL,
-            reach_id TEXT NOT NULL,    -- model reach identifier (aka opind)
-            repository_name TEXT NOT NULL,  -- optional: where the mapping comes from
-            exclude INTEGER DEFAULT 0, -- flag to indicate if this reach should be excluded (1) or included (0)
-            FOREIGN KEY (outlet_id) REFERENCES outlets.outlets(outlet_id)
-            );
-
-            -- Useful views:
-
-            -- View: station_reach_pairs
-            -- Derives the implicit many-to-many station <-> reach relationship via shared outlet_id
-            CREATE VIEW IF NOT EXISTS outlets.station_reach_pairs AS
-            SELECT
-            s.outlet_id,
-            s.station_id,
-            s.station_origin,
-            r.reach_id,
-            r.exclude,
-            r.repository_name,
-            FROM outlets.outlet_stations s
-            JOIN outlets.outlet_reaches r
-            ON s.outlet_id = r.outlet_id;
-
-          """)
+    query = outlets.OUTLETS_SCHEMA
+    con.execute(query)
+    outlets.build_outlets(con)
 
 def create_normalized_wiski_view(con: duckdb.DuckDBPyConnection):
     """
@@ -210,7 +256,7 @@ def create_normalized_wiski_view(con: duckdb.DuckDBPyConnection):
         "Quality Code Name" AS quality_code_name,            -- Rename Quality Code Name to quality_code_name
         parametertype_id,                                    -- Keeps parametertype_id as is
         constituent                                          -- Keeps constituent as is
-    FROM staging.wiski_raw;""")
+    FROM staging.wiski;""")
 
 
 def create_filtered_wiski_view(con: duckdb.DuckDBPyConnection, data_codes: list):
@@ -254,17 +300,22 @@ def create_staging_qc_count_view(con: duckdb.DuckDBPyConnection):
     Create a view in staging schema that counts quality codes for each station and constituent.
     """
     con.execute("""
-    CREATE OR REPLACE VIEW staging.wiski_qc_count AS (
+        CREATE OR REPLACE VIEW reports.wiski_qc_count AS (
         SELECT 
             w.station_no,
             w.parametertype_name,
             w."Quality Code",
-            w."Quality Code Name",
-            COUNT(w."Quality Code") AS count
-        FROM staging.wiski_raw w 
+            COUNT(w."Quality Code") AS count,
+            wqc."Text",
+            wqc.Description,
+            
+        FROM staging.wiski w 
+        LEFT JOIN mappings.wiski_quality_codes wqc
+            ON w."Quality Code" = wqc.quality_code
+        WHERE wqc.Active = 1
         GROUP BY
-            w."Quality Code",w."Quality Code Name",w.parametertype_name, w.station_no
-                );
+            w."Quality Code",wqc."Text",wqc.Description,w.parametertype_name, w.station_no
+                ); 
         """)
     # ORDER BY
     #         w.station_no,w.parametertype_name, w."Quality Code"
@@ -283,7 +334,7 @@ def create_combined_observations_view(con: duckdb.DuckDBPyConnection):
     SELECT datetime,value,station_id,station_origin,constituent,unit
     FROM analytics.wiski;
     """)
-
+ 
 
 def create_outlet_observations_view(con: duckdb.DuckDBPyConnection):
     """
@@ -299,8 +350,9 @@ def create_outlet_observations_view(con: duckdb.DuckDBPyConnection):
         COUNT(o.value) AS count
     FROM
         analytics.observations AS o
-    LEFT JOIN
+    INNER JOIN
         outlets.outlet_stations AS os ON o.station_id = os.station_id AND o.station_origin = os.station_origin
+    WHERE os.outlet_id IS NOT NULL
     GROUP BY
         os.outlet_id,
         o.constituent,
@@ -316,51 +368,65 @@ def create_outlet_observations_view(con: duckdb.DuckDBPyConnection):
 def create_outlet_observations_with_flow_view(con: duckdb.DuckDBPyConnection):
     
     con.execute("""
-    CREATE OR REPLACE VIEW analytics.outlet_observations_with_flow AS 
-        WITH baseflow_data AS (
-            SELECT
-                outlet_id,
-                datetime,
-                "value" AS baseflow_value
-            FROM
-                analytics.outlet_observations
-            WHERE
-                (constituent = 'QB')),
-        flow_data AS (
-            SELECT
-                outlet_id,
-                datetime,
-                "value" AS flow_value
-            FROM
-                analytics.outlet_observations
-            WHERE
-                (constituent = 'Q')),
-        constituent_data AS (
-            SELECT
-                outlet_id,
-                datetime,
-                constituent,
-                "value",
-                count
-            FROM
-                analytics.outlet_observations
-            WHERE
-                (constituent NOT IN ('Q', 'QB')))
-        SELECT
-            constituent_data.outlet_id,
-            constituent_data.constituent,
-            constituent_data.datetime,
-            constituent_data."value",
-            flow_data.flow_value,
-            baseflow_data.baseflow_value
-        FROM
-            constituent_data
-        FULL JOIN flow_data ON
-            (((constituent_data.outlet_id = flow_data.outlet_id)
-                AND (constituent_data.datetime = flow_data.datetime)))
-        LEFT JOIN baseflow_data ON
-            (((constituent_data.outlet_id = baseflow_data.outlet_id)
-                AND (constituent_data.datetime = baseflow_data.datetime)));""")
+                CREATE OR REPLACE VIEW analytics.outlet_observations_with_flow AS
+                WITH 
+                -- Extract baseflow data (constituent = 'QB')
+                baseflow_data AS (
+                    SELECT
+                        outlet_id,
+                        datetime,
+                        "value" AS baseflow_value
+                    FROM
+                        analytics.outlet_observations
+                    WHERE
+                        constituent = 'QB'
+                ),
+
+                -- Extract flow data (constituent = 'Q')
+                flow_data AS (
+                    SELECT
+                        outlet_id,
+                        datetime,
+                        "value" AS flow_value
+                    FROM
+                        analytics.outlet_observations
+                    WHERE
+                        constituent = 'Q'
+                ),
+
+                -- Extract all other constituent data (not 'Q' or 'QB')
+                constituent_data AS (
+                    SELECT
+                        outlet_id,
+                        datetime,
+                        constituent,
+                        "value",
+                        count
+                    FROM
+                        analytics.outlet_observations
+                    WHERE
+                        constituent NOT IN ('Q', 'QB')
+                )
+
+                -- Final join: Only include rows that have baseflow, flow, and constituent data
+                SELECT
+                    c.outlet_id,
+                    c.constituent,
+                    c.datetime,
+                    c."value",
+                    c.count,
+                    f.flow_value,
+                    b.baseflow_value
+                FROM
+                    constituent_data AS c
+                LEFT JOIN
+                    flow_data AS f
+                    ON c.outlet_id = f.outlet_id 
+                    AND c.datetime = f.datetime
+                LEFT JOIN
+                    baseflow_data AS b
+                    ON c.outlet_id = b.outlet_id 
+                    AND c.datetime = b.datetime;""")
     # ORDER BY
     #     constituent_data.outlet_id,
     #     constituent_data.datetime;
@@ -390,10 +456,10 @@ def create_constituent_summary_report(con: duckdb.DuckDBPyConnection):
                 
             # ORDER BY
             # constituent,sample_count;''')
-
+ 
 def create_outlet_summary_report(con: duckdb.DuckDBPyConnection):
     con.execute("""
-        CREATE VIEW reports.outlet_constituent_summary AS
+        CREATE OR REPLACE VIEW reports.outlet_constituent_summary AS
     SELECT
         outlet_id,
         constituent,
@@ -411,16 +477,6 @@ def create_outlet_summary_report(con: duckdb.DuckDBPyConnection):
     """)
 
     
-       
-def drop_station_id(con: duckdb.DuckDBPyConnection, station_id: str,station_origin: str):
-    """
-    Drop all data for a specific station from staging and analytics schemas.
-    """
-    con.execute(f"DELETE FROM staging.equis_raw WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM staging.wiski_raw WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM analytics.equis WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM analytics.wiski WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    update_views(con)
 
 def update_views(con: duckdb.DuckDBPyConnection):
     """
@@ -444,16 +500,69 @@ def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     return duckdb.connect(database=db_path.as_posix(), read_only=read_only)
 
 
-def load_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str, replace: bool = True):
+def drop_station_id(con: duckdb.DuckDBPyConnection, station_id: str,station_origin: str):
+    """
+    Drop all data for a specific station from staging and analytics schemas.
+    """
+    con.execute(f"DELETE FROM staging.equis WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
+    con.execute(f"DELETE FROM staging.wiski WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
+    con.execute(f"DELETE FROM analytics.equis WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
+    con.execute(f"DELETE FROM analytics.wiski WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
+    update_views(con)
+
+def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_name: str) -> list:
+    """
+    Get the column names of a DuckDB table.
+    """
+    #table_schema, table_name = table_name.split('.')
+    query = """
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_name = ? AND table_schema = ?
+    """
+    result = con.execute(query,[table_name,table_schema]).fetchall()
+    column_names = [row[0] for row in result]
+    return column_names
+
+
+def add_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_schema: str, table_name: str):
+    """
+    Append a pandas DataFrame into a DuckDB table. This will create the table
+    if it does not exist.
+    """
+
+
+    # get existing columns
+    existing_columns = get_column_names(con, table_schema, table_name)
+    df = df[[existing_columns]]
+
+
+    # register pandas DF and create table if not exists
+    con.register("tmp_df", df)
+
+    con.execute(f"""
+        INSERT INTO {table_schema}.{table_name} 
+        SELECT * FROM tmp_df
+    """)
+    con.unregister("tmp_df")
+
+def add_station_data(con: duckdb.DuckDBPyConnection, station_id: str, station_origin: str, table_schema: str, table_name: str, df: pd.DataFrame, replace: bool = False):
+    """
+    Add station data to the staging and analytics schemas.
+    """
+    if replace:
+        drop_station_id(con, station_id, station_origin)
+    add_to_table(con, df, table_schema, table_name)
+
+
+def load_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str):
     """
     Persist a pandas DataFrame into a DuckDB table. This will overwrite the table
     by default (replace=True).
     """
-    if replace:
-        con.execute(f"DROP TABLE IF EXISTS {table_name}")
     # register pandas DF and create table
     con.register("tmp_df", df)
-    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM tmp_df")
+    con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM tmp_df")
     con.unregister("tmp_df")
 
 def load_df_to_staging(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str, replace: bool = True):
@@ -468,23 +577,6 @@ def load_df_to_staging(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_n
     con.execute(f"CREATE TABLE staging.{table_name} AS SELECT * FROM tmp_df")
     con.unregister("tmp_df")
 
-def add_df_to_staging(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str):
-    """
-    Append a pandas DataFrame into a staging table. This will create the staging
-    table if it does not exist.
-    """
-    # register pandas DF and create table if not exists
-    con.register("tmp_df", df)
-    con.execute(f"""
-        CREATE TABLE IF NOT EXISTS staging.{table_name} AS 
-        SELECT * FROM tmp_df
-    """)
-    con.execute(f"""
-        INSERT INTO staging.{table_name} 
-        SELECT * FROM tmp_df
-    """)
-    con.unregister("tmp_df")
-
 def load_csv_to_staging(con: duckdb.DuckDBPyConnection, csv_path: str, table_name: str, replace: bool = True, **read_csv_kwargs):
     """
     Persist a CSV file into a staging table. This will overwrite the staging
@@ -496,7 +588,7 @@ def load_csv_to_staging(con: duckdb.DuckDBPyConnection, csv_path: str, table_nam
         CREATE TABLE staging.{table_name} AS 
         SELECT * FROM read_csv_auto('{csv_path}', {', '.join(f"{k}={repr(v)}" for k, v in read_csv_kwargs.items())})
     """)
-
+ 
 def load_parquet_to_staging(con: duckdb.DuckDBPyConnection, parquet_path: str, table_name: str, replace: bool = True):
     """
     Persist a Parquet file into a staging table. This will overwrite the staging
