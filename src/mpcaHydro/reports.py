@@ -43,7 +43,7 @@ def wiski_qc_counts(con: duckdb.DuckDBPyConnection):
     query = '''
     SELECT *,
     FROM 
-        staging.wiski_qc_count
+        reports.wiski_qc_count
     ORDER BY
         station_no,
         parametertype_name
