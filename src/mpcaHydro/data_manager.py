@@ -5,6 +5,7 @@ Created on Fri Jun  3 10:01:14 2022
 @author: mfratki
 """
 
+from copy import replace
 import pandas as pd
 #from abc import abstractmethod
 from pathlib import Path
@@ -64,88 +65,115 @@ def constituent_summary(db_path):
         return res.fetch_df()
 
 
+
+
 class dataManager():
 
-    def __init__(self,folderpath, oracle_user = None, oracle_password =None):
+    def __init__(self,folderpath, oracle_username = None, oracle_password =None, reset = False):
         
         self.data = {}
         self.folderpath = Path(folderpath)
         self.db_path = self.folderpath.joinpath('observations.duckdb')
-        
-        self.oracle_user = oracle_user
+        self.oracle_username = oracle_username
         self.oracle_password = oracle_password
-        warehouse.init_db(self.db_path,reset = False)
-        self.xref = xref
-        self.outlets = outlets
+
+        if not self.db_path.exists() or reset:
+            self._build_warehouse()
+
+        self.xref = xref #TODO: implement xref manager class
+        self.outlets = outlets #TODO: implement outlets manager class
         self.reports = reportManager(self.db_path)
 
     
     def connect_to_oracle(self):
         assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
-        equis.connect(user = self.oracle_user, password = self.oracle_password)
+        equis.connect(user = self.oracle_username, password = self.oracle_password)
     
     def credentials_exist(self):
-        if (self.oracle_user is not None) & (self.oracle_password is not None):
+        if (self.oracle_username is not None) & (self.oracle_password is not None):
             return True
         else:
             return False
         
     def _build_warehouse(self):
-        build_warehouse(self.folderpath)
+        warehouse.init_db(self.db_path.as_posix(),True)
 
-    def download_station_data(self,station_id,station_origin,overwrite=True,to_csv = False,filter_qc_codes = True, start_year = 1996, end_year = 2030,baseflow_method = 'Boughton'):
-        '''
-        Method to download data for a specific station and load it into the warehouse.
-        
-        :param self: Description
-        :param station_id: Station identifier
-        :param station_origin: source of station data: wiski, equis, or swd
-        :param overwrite: Whether to overwrite existing data
-        :param to_csv: Whether to export data to CSV
-        :param filter_qc_codes: Whether to filter quality control codes
-        :param start_year: Start year for data download
-        :param end_year: End year for data download
-        :param baseflow_method: Method for baseflow calculation
-        '''
-        with duckdb.connect(self.db_path,read_only=False) as con:
-            if overwrite:
-                warehouse.drop_station_id(con,station_id,station_origin)
-                warehouse.update_views(con)
-
-            if station_origin == 'wiski':
-                df = wiski.download([station_id],start_year = start_year, end_year = end_year)
-                warehouse.load_df_to_staging(con,df, 'wiski_raw', replace = overwrite)
-                warehouse.load_df_to_analytics(con,wiski.transform(df,filter_qc_codes = filter_qc_codes,baseflow_method = baseflow_method),'wiski') # method includes normalization
-                
-            elif station_origin == 'equis':
-                assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
-                df = equis.download([station_id])
-                warehouse.load_df_to_staging(con,df, 'equis_raw',replace = overwrite)
-                warehouse.load_df_to_analytics(con,equis.transform(df),'equis')
-
-            elif station_origin == 'swd':
-                df = etlSWD.download(station_id)
-                warehouse.load_df_to_staging(con,df, 'swd_raw', replace = overwrite)
-                warehouse.load_df_to_analytics(con,etlSWD.transform(df),'swd')
-            else:
-                raise ValueError('station_origin must be wiski, equis, or swd')    
-    
-        with duckdb.connect(self.db_path,read_only=False) as con:
+    def _process_wiski_data(self,filter_qc_codes = True, data_codes = None, baseflow_method = 'Boughton'):
+        with warehouse.connect(self.db_path,read_only = False) as con:
+            df = con.execute("SELECT * FROM staging.wiski").df()
+            df_transformed = wiski.transform(df, filter_qc_codes, data_codes, baseflow_method)
+            warehouse.load_df_to_table(con,df_transformed, 'analytics.wiski')
             warehouse.update_views(con)
 
-        if to_csv:
-            self.to_csv(station_id)
-            
+    def _process_equis_data(self):
+        with warehouse.connect(self.db_path,read_only = False) as con:
+            df = con.execute("SELECT * FROM staging.equis").df()
+            df_transformed = equis.transform(df)
+            warehouse.load_df_to_table(con,df_transformed, 'analytics.equis')
+            warehouse.update_views(con)
+
+    def _process_data(self,filter_qc_codes = True, data_codes = None, baseflow_method = 'Boughton'):
+        self._process_wiski_data(filter_qc_codes, data_codes, baseflow_method)
+        self._process_equis_data()
+
+    def _update_views(self):
+        with warehouse.connect(self.db_path,read_only = False) as con:
+            warehouse.update_views(con)
+
+    def _download_wiski_data(self,station_ids,start_year = 1996, end_year = 2030, filter_qc_codes = True, data_codes = None, baseflow_method = 'Boughton'):
+        with warehouse.connect(self.db_path,read_only = False) as con:
+            df = wiski.download(station_ids,start_year = start_year, end_year = end_year)
+            if not df.empty:
+                warehouse.load_df_to_table(con,df, 'staging.wiski')
+                warehouse.load_df_to_table(con,wiski.transform(df, filter_qc_codes,data_codes,baseflow_method), 'analytics.wiski')
+                warehouse.update_views(con)
+            else:
+                print('No data neccesary for HSPF calibration available from wiski for stations:',station_ids)     
+
+    def _download_equis_data(self,station_ids):
+        if self.credentials_exist():
+            self.connect_to_oracle()
+            print('Connected to Oracle database.')
+            with warehouse.connect(self.db_path,read_only = False) as con:
+                df = equis.download(station_ids)
+                if not df.empty:
+                    warehouse.load_df_to_table(con,df, 'staging.equis')
+                    warehouse.load_df_to_table(con,equis.transform(df.copy()), 'analytics.equis')
+                    warehouse.update_views(con)
+                else:
+                    print('No data neccesary for HSPF calibration available from equis for stations:',station_ids)
+        else:
+            raise ValueError('Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
+        
+
+    def _get_equis_template(self):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM staging.equis
+            LIMIT 0'''
+            df = con.execute(query).fetch_df().to_csv(self.folderpath.joinpath('equis_template.csv'), index=False)
         return df
     
-    def get_outlets(self):
+    def _get_wiski_template(self):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM staging.wiski
+            LIMIT 0'''
+            df = con.execute(query).fetch_df().to_csv(self.folderpath.joinpath('wiski_template.csv'), index=False)
+        return df
+
+    def get_outlets(self,model_name):
         with duckdb.connect(self.db_path,read_only=True) as con:
             query = '''
             SELECT *
             FROM outlets.station_reach_pairs
+            WHERE repository_name = ?
             ORDER BY outlet_id'''
-            df = con.execute(query).fetch_df()
+            df = con.execute(query,[model_name]).fetch_df()
         return df
+    
     def get_station_ids(self,station_origin = None):
         with duckdb.connect(self.db_path,read_only=True) as con:
             if station_origin is None:
@@ -163,9 +191,7 @@ class dataManager():
         return df['station_id'].to_list()
     
 
-    def get_station_data(self,station_ids,constituent,agg_period = None):
-        
-
+    def get_observation_data(self,station_ids,constituent,agg_period = None):
         with duckdb.connect(self.db_path,read_only=True) as con:
             query = '''
             SELECT *
@@ -184,9 +210,9 @@ class dataManager():
             df.attrs['agg_period'] = agg_period
 
         df.rename(columns={'value': 'observed'}, inplace=True) 
-        return df
+        return df.dropna(subset=['observed'])
     
-    def get_outlet_data(self,outlet_id,constituent,agg_period = 'D'):
+    def get_outlet_data(self,outlet_id,constituent,agg_period = 'D',to_csv = False):
         with duckdb.connect(self.db_path,read_only=True) as con:
             query = '''
             SELECT *
@@ -207,16 +233,35 @@ class dataManager():
         df.rename(columns={'value': 'observed',
                            'flow_value': 'observed_flow',
                            'baseflow_value': 'observed_baseflow'}, inplace=True) 
+        return df.dropna(subset=['observed'])
+    
+    def get_raw_data(self,station_id,station_origin, to_csv = False):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            if station_origin.lower() == 'equis':
+                query = '''
+                SELECT *
+                FROM staging.equis_raw
+                WHERE station_id = ?'''
+            elif station_origin.lower() == 'wiski':
+                query = '''
+                SELECT *
+                FROM staging.wiski_raw
+                WHERE station_id = ?'''
+            else:
+                raise ValueError(f'Station origin {station_origin} not recognized. Valid options are equis or wiski.')
+            
+            df = con.execute(query,[station_id]).fetch_df()    
+
+        if to_csv:
+            df.to_csv(self.folderpath.joinpath(f'{station_id}_raw.csv'), index=False)
         return df
 
-    
-
-    def to_csv(self,station_id,folderpath = None):
+    def to_csv(self,station_id  ,station_origin,folderpath = None):
         if folderpath is None:
             folderpath = self.folderpath
         else:
             folderpath = Path(folderpath)
-        df = self._load(station_id)
+        df = self.get_station_data([station_id],constituent = 'Q',agg_period = None)
         if len(df) > 0:
             df.to_csv(folderpath.joinpath(station_id + '.csv'))
         else:
