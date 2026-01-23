@@ -5,8 +5,6 @@ Created on Fri Jun  3 10:01:14 2022
 @author: mfratki
 """
 
-from copy import replace
-import pandas as pd
 #from abc import abstractmethod
 from pathlib import Path
 from mpcaHydro import etlSWD
