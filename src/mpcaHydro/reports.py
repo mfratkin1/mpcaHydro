@@ -12,9 +12,9 @@ class reportManager():
         with duckdb.connect(self.db_path,read_only=True) as con:
             return wiski_qc_counts(con)
         
-    def constituent_summary(self,constituent: str = None):
+    def station_summary(self,constituent: str = None):
         with duckdb.connect(self.db_path,read_only=True) as con:
-            return constituent_summary(con,constituent)
+            return station_summary(con,constituent)
         
     def station_reach_pairs(self):
         with duckdb.connect(self.db_path,read_only=True) as con:
@@ -51,7 +51,7 @@ def wiski_qc_counts(con: duckdb.DuckDBPyConnection):
     df = con.execute(query).fetch_df()
     return df
 
-def constituent_summary(con: duckdb.DuckDBPyConnection,constituent: str = None):
+def station_summary(con: duckdb.DuckDBPyConnection,constituent: str = None):
     
     query = '''
     SELECT *,
