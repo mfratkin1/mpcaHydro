@@ -82,6 +82,9 @@ class dataManager():
         self.outlets = outlets #TODO: implement outlets manager class
         self.reports = reportManager(self.db_path)
 
+    def _set_oracle_credentials(self, oracle_username, oracle_password):
+        self.oracle_username = oracle_username
+        self.oracle_password = oracle_password
     
     def connect_to_oracle(self):
         assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
@@ -233,6 +236,18 @@ class dataManager():
                            'baseflow_value': 'observed_baseflow'}, inplace=True) 
         return df.dropna(subset=['observed'])
     
+    def get_station_data(self,station_id,station_origin, to_csv = False):
+        with duckdb.connect(self.db_path,read_only=True) as con:
+            query = '''
+            SELECT *
+            FROM analytics.observations
+            WHERE station_id = ? AND station_origin = ?'''
+            df = con.execute(query,[station_id,station_origin]).fetch_df()    
+
+        if to_csv:
+            df.to_csv(self.folderpath.joinpath(f'{station_id}.csv'), index=False)
+        return df
+
     def get_raw_data(self,station_id,station_origin, to_csv = False):
         with duckdb.connect(self.db_path,read_only=True) as con:
             if station_origin.lower() == 'equis':
@@ -254,18 +269,6 @@ class dataManager():
             df.to_csv(self.folderpath.joinpath(f'{station_id}_raw.csv'), index=False)
         return df
 
-    def to_csv(self,station_id  ,station_origin,folderpath = None):
-        if folderpath is None:
-            folderpath = self.folderpath
-        else:
-            folderpath = Path(folderpath)
-        df = self.get_station_data([station_id],constituent = 'Q',agg_period = None)
-        if len(df) > 0:
-            df.to_csv(folderpath.joinpath(station_id + '.csv'))
-        else:
-            print(f'No {station_id} calibration data available at Station {station_id}')
-        
-        df.to_csv(folderpath.joinpath(station_id + '.csv'))
 
 
 # class database():
