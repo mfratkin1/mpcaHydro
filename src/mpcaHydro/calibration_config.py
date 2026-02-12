@@ -9,519 +9,63 @@ It defines the following entities:
 - Observation: Observation metadata including constituents, date ranges, sample counts
 - Metric: Metrics to calculate (NSE, logNSE, Pbias, etc.) with targets
 - Constraint: Loading rate constraints for watersheds and landcovers
+- GeneralConstraint: Scaffolding for general model-level constraints (to be defined)
 
-Users can pass in configuration files (YAML or JSON) to customize the calibration setup.
+Users can pass in configuration files (YAML, JSON, or TOML) to customize the calibration setup.
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
-import json
-
-try:
-    import yaml
-    YAML_AVAILABLE = True
-except ImportError:
-    YAML_AVAILABLE = False
 
 import duckdb
 import pandas as pd
 
+# Import data classes from the separate module
+from mpcaHydro.calibration_dataclasses import (
+    Metric,
+    Observation,
+    LandcoverConstraint,
+    WatershedConstraint,
+    GeneralConstraint,
+    Station,
+    Location,
+    CalibrationConfig,
+    get_default_timeseries_metrics,
+    get_default_discrete_metrics,
+)
 
-# ============================================================================
-# Data Classes
-# ============================================================================
+# Import config file I/O from the separate module
+from mpcaHydro.calibration_io import (
+    load_config,
+    save_config,
+)
 
-@dataclass
-class Metric:
-    """
-    Represents a metric to be calculated during calibration.
-    
-    Attributes:
-        name: Name of the metric (e.g., 'NSE', 'logNSE', 'Pbias')
-        target: Target value for the metric
-        weight: Optional weight for multi-objective optimization
-        enabled: Whether this metric is active
-    """
-    name: str
-    target: Optional[float] = None
-    weight: float = 1.0
-    enabled: bool = True
-
-    def to_dict(self) -> dict:
-        return {
-            'name': self.name,
-            'target': self.target,
-            'weight': self.weight,
-            'enabled': self.enabled
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Metric':
-        return cls(
-            name=data['name'],
-            target=data.get('target'),
-            weight=data.get('weight', 1.0),
-            enabled=data.get('enabled', True)
-        )
-
-
-@dataclass
-class ConstituentConfig:
-    """
-    Configuration for a constituent at a station.
-    
-    Attributes:
-        name: Constituent name (e.g., 'Q', 'TSS', 'TP')
-        metrics: List of metrics to calculate for this constituent
-        derived_from: Optional list of other constituents used to derive this one
-                     (e.g., load derived from flow and concentration)
-    """
-    name: str
-    metrics: List[Metric] = field(default_factory=list)
-    derived_from: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            'name': self.name,
-            'metrics': [m.to_dict() for m in self.metrics],
-            'derived_from': self.derived_from
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'ConstituentConfig':
-        metrics = [Metric.from_dict(m) for m in data.get('metrics', [])]
-        return cls(
-            name=data['name'],
-            metrics=metrics,
-            derived_from=data.get('derived_from', [])
-        )
-
-
-@dataclass
-class Observation:
-    """
-    Summary of observation data availability for a constituent at a station.
-    
-    Attributes:
-        constituent: Constituent name
-        start_year: First year with data
-        end_year: Last year with data
-        avg_samples_per_year: Average number of samples per calendar year
-        median_samples_per_year: Median number of samples per calendar year
-        years_with_data: Number of years with data collected
-        total_samples: Total number of samples
-    """
-    constituent: str
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
-    avg_samples_per_year: Optional[float] = None
-    median_samples_per_year: Optional[float] = None
-    years_with_data: Optional[int] = None
-    total_samples: Optional[int] = None
-
-    def to_dict(self) -> dict:
-        return {
-            'constituent': self.constituent,
-            'start_year': self.start_year,
-            'end_year': self.end_year,
-            'avg_samples_per_year': self.avg_samples_per_year,
-            'median_samples_per_year': self.median_samples_per_year,
-            'years_with_data': self.years_with_data,
-            'total_samples': self.total_samples
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Observation':
-        return cls(
-            constituent=data['constituent'],
-            start_year=data.get('start_year'),
-            end_year=data.get('end_year'),
-            avg_samples_per_year=data.get('avg_samples_per_year'),
-            median_samples_per_year=data.get('median_samples_per_year'),
-            years_with_data=data.get('years_with_data'),
-            total_samples=data.get('total_samples')
-        )
-
-
-@dataclass
-class LandcoverConstraint:
-    """
-    Loading rate constraint for a specific landcover type.
-    
-    Attributes:
-        landcover_type: Type of landcover (e.g., 'forest', 'urban', 'agricultural')
-        constituent: Constituent name for the loading rate
-        target_rate: Target loading rate (units depend on constituent)
-        min_rate: Minimum acceptable loading rate
-        max_rate: Maximum acceptable loading rate
-    """
-    landcover_type: str
-    constituent: str
-    target_rate: Optional[float] = None
-    min_rate: Optional[float] = None
-    max_rate: Optional[float] = None
-
-    def to_dict(self) -> dict:
-        return {
-            'landcover_type': self.landcover_type,
-            'constituent': self.constituent,
-            'target_rate': self.target_rate,
-            'min_rate': self.min_rate,
-            'max_rate': self.max_rate
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'LandcoverConstraint':
-        return cls(
-            landcover_type=data['landcover_type'],
-            constituent=data['constituent'],
-            target_rate=data.get('target_rate'),
-            min_rate=data.get('min_rate'),
-            max_rate=data.get('max_rate')
-        )
-
-
-@dataclass
-class WatershedConstraint:
-    """
-    Loading rate constraint for the whole watershed.
-    
-    Attributes:
-        constituent: Constituent name for the loading rate
-        target_rate: Target loading rate for the whole watershed
-        min_rate: Minimum acceptable loading rate
-        max_rate: Maximum acceptable loading rate
-        landcover_constraints: List of landcover-specific constraints
-    """
-    constituent: str
-    target_rate: Optional[float] = None
-    min_rate: Optional[float] = None
-    max_rate: Optional[float] = None
-    landcover_constraints: List[LandcoverConstraint] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            'constituent': self.constituent,
-            'target_rate': self.target_rate,
-            'min_rate': self.min_rate,
-            'max_rate': self.max_rate,
-            'landcover_constraints': [lc.to_dict() for lc in self.landcover_constraints]
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'WatershedConstraint':
-        lc_constraints = [
-            LandcoverConstraint.from_dict(lc) 
-            for lc in data.get('landcover_constraints', [])
-        ]
-        return cls(
-            constituent=data['constituent'],
-            target_rate=data.get('target_rate'),
-            min_rate=data.get('min_rate'),
-            max_rate=data.get('max_rate'),
-            landcover_constraints=lc_constraints
-        )
-
-
-@dataclass
-class Station:
-    """
-    Represents a monitoring station.
-    
-    Attributes:
-        station_id: Unique identifier for the station
-        station_origin: Data source (e.g., 'wiski', 'equis')
-        repository_name: Name of the model repository
-        true_reach_id: The model reach the station is located on (one-to-one)
-        constituents: List of constituent configurations
-        observations: List of observation summaries for available data
-        comments: Optional notes about the station
-    """
-    station_id: str
-    station_origin: str
-    repository_name: str
-    true_reach_id: Optional[int] = None
-    constituents: List[ConstituentConfig] = field(default_factory=list)
-    observations: List[Observation] = field(default_factory=list)
-    comments: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        return {
-            'station_id': self.station_id,
-            'station_origin': self.station_origin,
-            'repository_name': self.repository_name,
-            'true_reach_id': self.true_reach_id,
-            'constituents': [c.to_dict() for c in self.constituents],
-            'observations': [o.to_dict() for o in self.observations],
-            'comments': self.comments
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Station':
-        constituents = [
-            ConstituentConfig.from_dict(c) 
-            for c in data.get('constituents', [])
-        ]
-        observations = [
-            Observation.from_dict(o) 
-            for o in data.get('observations', [])
-        ]
-        return cls(
-            station_id=data['station_id'],
-            station_origin=data['station_origin'],
-            repository_name=data['repository_name'],
-            true_reach_id=data.get('true_reach_id'),
-            constituents=constituents,
-            observations=observations,
-            comments=data.get('comments')
-        )
-
-
-@dataclass
-class Location:
-    """
-    Represents a calibration location (grouping of stations).
-    
-    A location can have one or more stations. Multiple stations may be grouped
-    when individual stations have insufficient data for calibration but combined
-    data is sufficient.
-    
-    Attributes:
-        location_id: Unique identifier for the location
-        location_name: Human-readable name for the location
-        repository_name: Name of the model repository
-        reach_ids: The model output reaches that best map to this location (many-to-many)
-        upstream_reach_ids: Optional upstream reach IDs for watershed loading calculations
-        flow_station_ids: Station IDs that can provide supplemental flow data
-        stations: List of stations at this location
-        watershed_constraints: Loading rate constraints for the watershed
-        notes: Optional notes about the location
-    """
-    location_id: int
-    location_name: str
-    repository_name: str
-    reach_ids: List[int] = field(default_factory=list)
-    upstream_reach_ids: List[int] = field(default_factory=list)
-    flow_station_ids: List[str] = field(default_factory=list)
-    stations: List[Station] = field(default_factory=list)
-    watershed_constraints: List[WatershedConstraint] = field(default_factory=list)
-    notes: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        return {
-            'location_id': self.location_id,
-            'location_name': self.location_name,
-            'repository_name': self.repository_name,
-            'reach_ids': self.reach_ids,
-            'upstream_reach_ids': self.upstream_reach_ids,
-            'flow_station_ids': self.flow_station_ids,
-            'stations': [s.to_dict() for s in self.stations],
-            'watershed_constraints': [w.to_dict() for w in self.watershed_constraints],
-            'notes': self.notes
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'Location':
-        stations = [Station.from_dict(s) for s in data.get('stations', [])]
-        watershed_constraints = [
-            WatershedConstraint.from_dict(w) 
-            for w in data.get('watershed_constraints', [])
-        ]
-        return cls(
-            location_id=data['location_id'],
-            location_name=data['location_name'],
-            repository_name=data['repository_name'],
-            reach_ids=data.get('reach_ids', []),
-            upstream_reach_ids=data.get('upstream_reach_ids', []),
-            flow_station_ids=data.get('flow_station_ids', []),
-            stations=stations,
-            watershed_constraints=watershed_constraints,
-            notes=data.get('notes')
-        )
-
-    def get_all_reach_ids(self) -> List[int]:
-        """Get all reach IDs for this location."""
-        return self.reach_ids
-
-    def get_all_station_ids(self) -> List[str]:
-        """Get all station IDs at this location."""
-        return [station.station_id for station in self.stations]
-
-
-@dataclass
-class CalibrationConfig:
-    """
-    Root configuration for calibration locations.
-    
-    Attributes:
-        repository_name: Name of the model repository
-        locations: List of calibration locations
-        default_metrics: Default metrics to apply if not specified at station level
-        version: Configuration version for tracking changes
-    """
-    repository_name: str
-    locations: List[Location] = field(default_factory=list)
-    default_metrics: List[Metric] = field(default_factory=list)
-    version: str = "1.0"
-
-    def to_dict(self) -> dict:
-        return {
-            'repository_name': self.repository_name,
-            'locations': [loc.to_dict() for loc in self.locations],
-            'default_metrics': [m.to_dict() for m in self.default_metrics],
-            'version': self.version
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> 'CalibrationConfig':
-        locations = [Location.from_dict(loc) for loc in data.get('locations', [])]
-        default_metrics = [
-            Metric.from_dict(m) 
-            for m in data.get('default_metrics', [])
-        ]
-        return cls(
-            repository_name=data['repository_name'],
-            locations=locations,
-            default_metrics=default_metrics,
-            version=data.get('version', '1.0')
-        )
-
-    def get_location_by_id(self, location_id: int) -> Optional[Location]:
-        """Get a location by its ID."""
-        for loc in self.locations:
-            if loc.location_id == location_id:
-                return loc
-        return None
-
-    def get_location_by_name(self, location_name: str) -> Optional[Location]:
-        """Get a location by its name."""
-        for loc in self.locations:
-            if loc.location_name == location_name:
-                return loc
-        return None
-
-    def get_all_stations(self) -> List[Station]:
-        """Get all stations across all locations."""
-        stations = []
-        for loc in self.locations:
-            stations.extend(loc.stations)
-        return stations
+# Re-export for backwards compatibility
+__all__ = [
+    'Metric',
+    'Observation', 
+    'LandcoverConstraint',
+    'WatershedConstraint',
+    'GeneralConstraint',
+    'Station',
+    'Location',
+    'CalibrationConfig',
+    'get_default_timeseries_metrics',
+    'get_default_discrete_metrics',
+    'load_config',
+    'save_config',
+    'create_example_config',
+    'init_calibration_db',
+    'save_config_to_db',
+    'load_config_from_db',
+    'CalibrationManager',
+    'CALIBRATION_SCHEMA',
+]
 
 
 # ============================================================================
-# Default Metrics Configuration
+# Example Configuration
 # ============================================================================
-
-def get_default_timeseries_metrics() -> List[Metric]:
-    """
-    Get default metrics for timeseries observations (e.g., flow).
-    """
-    return [
-        Metric(name='NSE', target=0.5, weight=1.0),
-        Metric(name='logNSE', target=0.5, weight=1.0),
-        Metric(name='Pbias', target=10.0, weight=1.0),
-        Metric(name='monthly_average', target=15.0, weight=0.5),
-        Metric(name='annual_average', target=15.0, weight=0.5),
-        Metric(name='percentile_10', target=20.0, weight=0.5),
-        Metric(name='percentile_90', target=20.0, weight=0.5),
-        Metric(name='seasonal_average', target=15.0, weight=0.5),
-    ]
-
-
-def get_default_discrete_metrics() -> List[Metric]:
-    """
-    Get default metrics for discrete sample observations (e.g., water quality).
-    """
-    return [
-        Metric(name='Pbias', target=25.0, weight=1.0),
-        Metric(name='monthly_average', target=25.0, weight=0.5),
-        Metric(name='seasonal_average', target=25.0, weight=0.5),
-    ]
-
-
-# ============================================================================
-# Configuration File Loading/Saving
-# ============================================================================
-
-def load_config(filepath: Union[str, Path]) -> CalibrationConfig:
-    """
-    Load calibration configuration from a file.
-    
-    Supports YAML and JSON formats based on file extension.
-    
-    Args:
-        filepath: Path to the configuration file
-        
-    Returns:
-        CalibrationConfig object
-        
-    Raises:
-        ValueError: If file format is not supported
-        FileNotFoundError: If file does not exist
-    """
-    filepath = Path(filepath)
-    
-    if not filepath.exists():
-        raise FileNotFoundError(f"Configuration file not found: {filepath}")
-    
-    with open(filepath, 'r') as f:
-        content = f.read()
-    
-    if filepath.suffix.lower() in ['.yaml', '.yml']:
-        if not YAML_AVAILABLE:
-            raise ImportError(
-                "PyYAML is required to load YAML configuration files. "
-                "Install it with: pip install pyyaml"
-            )
-        data = yaml.safe_load(content)
-    elif filepath.suffix.lower() == '.json':
-        data = json.loads(content)
-    else:
-        raise ValueError(
-            f"Unsupported configuration file format: {filepath.suffix}. "
-            "Supported formats: .yaml, .yml, .json"
-        )
-    
-    return CalibrationConfig.from_dict(data)
-
-
-def save_config(config: CalibrationConfig, filepath: Union[str, Path]) -> None:
-    """
-    Save calibration configuration to a file.
-    
-    Supports YAML and JSON formats based on file extension.
-    
-    Args:
-        config: CalibrationConfig object to save
-        filepath: Path to save the configuration file
-        
-    Raises:
-        ValueError: If file format is not supported
-    """
-    filepath = Path(filepath)
-    data = config.to_dict()
-    
-    # Ensure parent directory exists
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    
-    if filepath.suffix.lower() in ['.yaml', '.yml']:
-        if not YAML_AVAILABLE:
-            raise ImportError(
-                "PyYAML is required to save YAML configuration files. "
-                "Install it with: pip install pyyaml"
-            )
-        with open(filepath, 'w') as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
-    elif filepath.suffix.lower() == '.json':
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
-    else:
-        raise ValueError(
-            f"Unsupported configuration file format: {filepath.suffix}. "
-            "Supported formats: .yaml, .yml, .json"
-        )
-
 
 def create_example_config(repository_name: str) -> CalibrationConfig:
     """
@@ -539,13 +83,6 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
         station_origin='wiski',
         repository_name=repository_name,
         true_reach_id=650,
-        constituents=[
-            ConstituentConfig(
-                name='Q',
-                metrics=get_default_timeseries_metrics(),
-                derived_from=[]
-            ),
-        ],
         observations=[
             Observation(
                 constituent='Q',
@@ -554,7 +91,9 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
                 avg_samples_per_year=365.0,
                 median_samples_per_year=365.0,
                 years_with_data=24,
-                total_samples=8760
+                total_samples=8760,
+                metrics=get_default_timeseries_metrics(),
+                derived_from=[]
             ),
         ],
         comments='Primary flow monitoring station'
@@ -566,23 +105,6 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
         station_origin='equis',
         repository_name=repository_name,
         true_reach_id=650,
-        constituents=[
-            ConstituentConfig(
-                name='TSS',
-                metrics=get_default_discrete_metrics(),
-                derived_from=[]
-            ),
-            ConstituentConfig(
-                name='TP',
-                metrics=get_default_discrete_metrics(),
-                derived_from=[]
-            ),
-            ConstituentConfig(
-                name='TP_load',
-                metrics=[Metric(name='Pbias', target=30.0)],
-                derived_from=['TP', 'Q']  # Load derived from concentration and flow
-            ),
-        ],
         observations=[
             Observation(
                 constituent='TSS',
@@ -591,7 +113,9 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
                 avg_samples_per_year=12.0,
                 median_samples_per_year=10.0,
                 years_with_data=15,
-                total_samples=180
+                total_samples=180,
+                metrics=get_default_discrete_metrics(),
+                derived_from=[]
             ),
             Observation(
                 constituent='TP',
@@ -600,7 +124,14 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
                 avg_samples_per_year=12.0,
                 median_samples_per_year=10.0,
                 years_with_data=15,
-                total_samples=180
+                total_samples=180,
+                metrics=get_default_discrete_metrics(),
+                derived_from=[]
+            ),
+            Observation(
+                constituent='TP_load',
+                metrics=[Metric(name='Pbias', target=30.0)],
+                derived_from=['TP', 'Q']  # Load derived from concentration and flow
             ),
         ],
         comments='Water quality monitoring station'
@@ -646,6 +177,7 @@ def create_example_config(repository_name: str) -> CalibrationConfig:
         repository_name=repository_name,
         locations=[location],
         default_metrics=get_default_timeseries_metrics(),
+        general_constraints=[],  # Placeholder for future general constraints
         version='1.0'
     )
 
@@ -892,17 +424,17 @@ def save_config_to_db(
                     [location.location_id, station.station_id, station.station_origin]
                 )
                 
-                # Insert constituents and metrics
-                for constituent_config in station.constituents:
+                # Insert observations (includes constituent config with metrics)
+                for observation in station.observations:
                     con.execute(
                         """INSERT INTO outlets.calibration_constituents
                            (id, station_id, station_origin, constituent)
                            VALUES (?, ?, ?, ?)""",
                         [constituent_id_counter, station.station_id, 
-                         station.station_origin, constituent_config.name]
+                         station.station_origin, observation.constituent]
                     )
                     
-                    for metric in constituent_config.metrics:
+                    for metric in observation.metrics:
                         con.execute(
                             """INSERT INTO outlets.calibration_metrics
                                (id, constituent_id, metric_name, target, weight, enabled)
@@ -912,7 +444,7 @@ def save_config_to_db(
                         )
                         metric_id_counter += 1
                     
-                    for source in constituent_config.derived_from:
+                    for source in observation.derived_from:
                         con.execute(
                             """INSERT INTO outlets.calibration_derived_constituents
                                (constituent_id, source_constituent)
@@ -1000,20 +532,20 @@ def load_config_from_db(
             
             stations = []
             for _, sta_row in stations_df.iterrows():
-                # Load constituents
-                constituents_df = con.execute(
+                # Load observations (includes constituent config with metrics)
+                observations_df = con.execute(
                     """SELECT * FROM outlets.calibration_constituents
                        WHERE station_id = ? AND station_origin = ?""",
                     [sta_row['station_id'], sta_row['station_origin']]
                 ).fetchdf()
                 
-                constituents = []
-                for _, const_row in constituents_df.iterrows():
-                    # Load metrics for this constituent
+                observations = []
+                for _, obs_row in observations_df.iterrows():
+                    # Load metrics for this observation
                     metrics_df = con.execute(
                         """SELECT * FROM outlets.calibration_metrics
                            WHERE constituent_id = ?""",
-                        [const_row['id']]
+                        [obs_row['id']]
                     ).fetchdf()
                     
                     metrics = [
@@ -1030,12 +562,12 @@ def load_config_from_db(
                     derived_df = con.execute(
                         """SELECT source_constituent FROM outlets.calibration_derived_constituents
                            WHERE constituent_id = ?""",
-                        [const_row['id']]
+                        [obs_row['id']]
                     ).fetchdf()
                     derived_from = derived_df['source_constituent'].tolist() if not derived_df.empty else []
                     
-                    constituents.append(ConstituentConfig(
-                        name=const_row['constituent'],
+                    observations.append(Observation(
+                        constituent=obs_row['constituent'],
                         metrics=metrics,
                         derived_from=derived_from
                     ))
@@ -1058,8 +590,7 @@ def load_config_from_db(
                     station_origin=sta_row['station_origin'],
                     repository_name=repository_name,
                     true_reach_id=true_reach_id,
-                    constituents=constituents,
-                    observations=[],  # Not stored in DB
+                    observations=observations,
                     comments=comments
                 ))
             

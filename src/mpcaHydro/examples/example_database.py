@@ -11,11 +11,11 @@ from mpcaHydro.calibration_config import (
     CalibrationManager,
     Location,
     Station,
-    ConstituentConfig,
     Observation,
     Metric,
     WatershedConstraint,
     LandcoverConstraint,
+    GeneralConstraint,
     create_example_config,
     save_config,
     load_config,
@@ -36,22 +36,12 @@ def example_build_database():
     # -------------------------------------------------------
     
     # Define stations at the calibration location
+    # Note: Observation now includes constituent config (metrics, derived_from)
     flow_station = Station(
         station_id='E66050001',
         station_origin='wiski',
         repository_name='Clearwater',
         true_reach_id=650,
-        constituents=[
-            ConstituentConfig(
-                name='Q',
-                metrics=[
-                    Metric(name='NSE', target=0.5, weight=1.0),
-                    Metric(name='logNSE', target=0.5, weight=1.0),
-                    Metric(name='Pbias', target=10.0, weight=1.0),
-                ],
-                derived_from=[]
-            ),
-        ],
         observations=[
             Observation(
                 constituent='Q',
@@ -59,7 +49,13 @@ def example_build_database():
                 end_year=2023,
                 avg_samples_per_year=365.0,
                 years_with_data=24,
-                total_samples=8760
+                total_samples=8760,
+                metrics=[
+                    Metric(name='NSE', target=0.5, weight=1.0),
+                    Metric(name='logNSE', target=0.5, weight=1.0),
+                    Metric(name='Pbias', target=10.0, weight=1.0),
+                ],
+                derived_from=[]
             ),
         ],
         comments='USGS flow monitoring station'
@@ -70,22 +66,6 @@ def example_build_database():
         station_origin='equis',
         repository_name='Clearwater',
         true_reach_id=650,
-        constituents=[
-            ConstituentConfig(
-                name='TP',
-                metrics=[
-                    Metric(name='Pbias', target=25.0, weight=1.0),
-                ],
-                derived_from=[]
-            ),
-            ConstituentConfig(
-                name='TP_load',
-                metrics=[
-                    Metric(name='Pbias', target=30.0, weight=1.0),
-                ],
-                derived_from=['TP', 'Q']  # Derived from TP concentration and Q flow
-            ),
-        ],
         observations=[
             Observation(
                 constituent='TP',
@@ -93,7 +73,18 @@ def example_build_database():
                 end_year=2020,
                 avg_samples_per_year=12.0,
                 years_with_data=15,
-                total_samples=180
+                total_samples=180,
+                metrics=[
+                    Metric(name='Pbias', target=25.0, weight=1.0),
+                ],
+                derived_from=[]
+            ),
+            Observation(
+                constituent='TP_load',
+                metrics=[
+                    Metric(name='Pbias', target=30.0, weight=1.0),
+                ],
+                derived_from=['TP', 'Q']  # Derived from TP concentration and Q flow
             ),
         ],
         comments='MPCA water quality station'
@@ -139,6 +130,7 @@ def example_build_database():
             Metric(name='NSE', target=0.5),
             Metric(name='Pbias', target=10.0),
         ],
+        general_constraints=[],  # Placeholder for future general model constraints
         version='1.0'
     )
 

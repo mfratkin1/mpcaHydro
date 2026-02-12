@@ -4,7 +4,7 @@ Tests for the calibration_config module.
 
 This module tests the calibration configuration system including:
 - Data classes (Location, Station, Observation, Metric, etc.)
-- Configuration file loading/saving (YAML, JSON)
+- Configuration file loading/saving (YAML, JSON, TOML)
 - Database integration
 """
 
@@ -16,10 +16,10 @@ import pytest
 # Import the module under test
 from mpcaHydro.calibration_config import (
     Metric,
-    ConstituentConfig,
     Observation,
     LandcoverConstraint,
     WatershedConstraint,
+    GeneralConstraint,
     Station,
     Location,
     CalibrationConfig,
@@ -72,42 +72,52 @@ class TestMetric:
         assert metric.enabled is True
 
 
-class TestConstituentConfig:
-    """Tests for the ConstituentConfig data class."""
+class TestObservation:
+    """Tests for the Observation data class (includes constituent config)."""
     
-    def test_constituent_creation(self):
-        """Test creating a ConstituentConfig instance."""
+    def test_observation_creation(self):
+        """Test creating an Observation instance."""
         metrics = [Metric(name='NSE', target=0.5)]
-        constituent = ConstituentConfig(
-            name='Q',
+        observation = Observation(
+            constituent='Q',
+            start_year=2000,
+            end_year=2023,
+            total_samples=8760,
             metrics=metrics,
             derived_from=[]
         )
-        assert constituent.name == 'Q'
-        assert len(constituent.metrics) == 1
-        assert constituent.derived_from == []
+        assert observation.constituent == 'Q'
+        assert observation.start_year == 2000
+        assert observation.end_year == 2023
+        assert observation.total_samples == 8760
+        assert len(observation.metrics) == 1
+        assert observation.derived_from == []
     
-    def test_derived_constituent(self):
-        """Test creating a derived constituent."""
-        constituent = ConstituentConfig(
-            name='TP_load',
+    def test_derived_observation(self):
+        """Test creating a derived observation."""
+        observation = Observation(
+            constituent='TP_load',
             metrics=[Metric(name='Pbias', target=30.0)],
             derived_from=['TP', 'Q']
         )
-        assert constituent.name == 'TP_load'
-        assert 'TP' in constituent.derived_from
-        assert 'Q' in constituent.derived_from
+        assert observation.constituent == 'TP_load'
+        assert 'TP' in observation.derived_from
+        assert 'Q' in observation.derived_from
     
-    def test_constituent_round_trip(self):
+    def test_observation_round_trip(self):
         """Test serialization round-trip."""
-        original = ConstituentConfig(
-            name='TSS',
+        original = Observation(
+            constituent='TSS',
+            start_year=2005,
+            end_year=2020,
+            avg_samples_per_year=12.0,
             metrics=[Metric(name='Pbias', target=25.0)],
             derived_from=[]
         )
         d = original.to_dict()
-        restored = ConstituentConfig.from_dict(d)
-        assert restored.name == original.name
+        restored = Observation.from_dict(d)
+        assert restored.constituent == original.constituent
+        assert restored.start_year == original.start_year
         assert len(restored.metrics) == len(original.metrics)
 
 
@@ -309,10 +319,10 @@ class TestConfigFileSerialization:
             assert loaded.repository_name == config.repository_name
             assert len(loaded.locations) == len(config.locations)
             
-            # Check that stations and constituents are preserved
+            # Check that stations and observations are preserved
             station = loaded.locations[0].stations[0]
             assert station.station_id == 'E66050001'
-            assert len(station.constituents) > 0
+            assert len(station.observations) > 0
     
     def test_load_nonexistent_file(self):
         """Test loading a non-existent file raises error."""
@@ -439,38 +449,38 @@ class TestWatershedConstraints:
         assert restored.landcover_constraints[0].landcover_type == 'urban'
 
 
-class TestObservation:
-    """Tests for observation summary."""
+class TestGeneralConstraint:
+    """Tests for the GeneralConstraint data class."""
     
-    def test_observation_summary_creation(self):
-        """Test creating an observation summary."""
-        summary = Observation(
-            constituent='Q',
-            start_year=2000,
-            end_year=2023,
-            avg_samples_per_year=365.0,
-            years_with_data=24,
-            total_samples=8760
+    def test_general_constraint_creation(self):
+        """Test creating a GeneralConstraint instance."""
+        constraint = GeneralConstraint(
+            name='catchment_loading',
+            constraint_type='loading_rate',
+            parameters={'max_rate': 1.5},
+            enabled=True,
+            notes='Test constraint'
         )
-        assert summary.constituent == 'Q'
-        assert summary.years_with_data == 24
+        assert constraint.name == 'catchment_loading'
+        assert constraint.constraint_type == 'loading_rate'
+        assert constraint.parameters['max_rate'] == 1.5
     
-    def test_observation_summary_round_trip(self):
+    def test_general_constraint_round_trip(self):
         """Test serialization round-trip."""
-        original = Observation(
-            constituent='TP',
-            start_year=2005,
-            end_year=2020,
-            avg_samples_per_year=12.0,
-            median_samples_per_year=10.0,
-            years_with_data=15,
-            total_samples=180
+        original = GeneralConstraint(
+            name='surface_runoff',
+            constraint_type='runoff_rate',
+            parameters={'min_rate': 0.1, 'max_rate': 0.5},
+            enabled=False,
+            notes='Placeholder constraint'
         )
         d = original.to_dict()
-        restored = Observation.from_dict(d)
+        restored = GeneralConstraint.from_dict(d)
         
-        assert restored.constituent == original.constituent
-        assert restored.total_samples == original.total_samples
+        assert restored.name == original.name
+        assert restored.constraint_type == original.constraint_type
+        assert restored.parameters == original.parameters
+        assert restored.enabled == original.enabled
 
 
 if __name__ == '__main__':
