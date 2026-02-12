@@ -305,6 +305,25 @@ class TestConfigFileSerialization:
             assert loaded.repository_name == config.repository_name
             assert len(loaded.locations) == len(config.locations)
     
+    def test_save_and_load_yaml(self):
+        """Test saving and loading YAML configuration."""
+        config = create_example_config('TestRepo')
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / 'config.yaml'
+            save_config(config, filepath)
+            
+            assert filepath.exists()
+            
+            loaded = load_config(filepath)
+            assert loaded.repository_name == config.repository_name
+            assert len(loaded.locations) == len(config.locations)
+            
+            # Check that stations and constituents are preserved
+            station = loaded.locations[0].stations[0]
+            assert station.station_id == 'E66050001'
+            assert len(station.constituents) > 0
+    
     def test_load_nonexistent_file(self):
         """Test loading a non-existent file raises error."""
         with pytest.raises(FileNotFoundError):
