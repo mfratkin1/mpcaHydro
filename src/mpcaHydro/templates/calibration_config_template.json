@@ -1,0 +1,134 @@
+{
+  "version": "1.0",
+  "repository_name": "Clearwater",
+  "default_metrics": [
+    {"name": "NSE", "target": 0.5, "weight": 1.0, "enabled": true},
+    {"name": "logNSE", "target": 0.5, "weight": 1.0, "enabled": true},
+    {"name": "Pbias", "target": 10.0, "weight": 1.0, "enabled": true},
+    {"name": "monthly_average", "target": 15.0, "weight": 0.5, "enabled": true},
+    {"name": "annual_average", "target": 15.0, "weight": 0.5, "enabled": true},
+    {"name": "percentile_10", "target": 20.0, "weight": 0.5, "enabled": true},
+    {"name": "percentile_90", "target": 20.0, "weight": 0.5, "enabled": true},
+    {"name": "seasonal_average", "target": 15.0, "weight": 0.5, "enabled": true}
+  ],
+  "locations": [
+    {
+      "location_id": 1,
+      "location_name": "Clearwater Outlet",
+      "repository_name": "Clearwater",
+      "notes": "Main outlet combining flow and water quality stations",
+      "stations": [
+        {
+          "station_id": "E66050001",
+          "station_origin": "wiski",
+          "repository_name": "Clearwater",
+          "true_reach_id": 650,
+          "reach_ids": [650],
+          "upstream_reach_ids": [649, 648],
+          "flow_station_ids": [],
+          "comments": "Primary USGS flow monitoring station",
+          "constituents": [
+            {
+              "name": "Q",
+              "derived_from": [],
+              "metrics": [
+                {"name": "NSE", "target": 0.5, "weight": 1.0, "enabled": true},
+                {"name": "logNSE", "target": 0.5, "weight": 1.0, "enabled": true},
+                {"name": "Pbias", "target": 10.0, "weight": 1.0, "enabled": true}
+              ]
+            }
+          ],
+          "observation_summaries": [
+            {
+              "constituent": "Q",
+              "start_year": 2000,
+              "end_year": 2023,
+              "avg_samples_per_year": 365.0,
+              "median_samples_per_year": 365.0,
+              "years_with_data": 24,
+              "total_samples": 8760
+            }
+          ]
+        },
+        {
+          "station_id": "S002-118",
+          "station_origin": "equis",
+          "repository_name": "Clearwater",
+          "true_reach_id": 650,
+          "reach_ids": [650],
+          "upstream_reach_ids": [649, 648],
+          "flow_station_ids": ["E66050001"],
+          "comments": "MPCA water quality monitoring station",
+          "constituents": [
+            {
+              "name": "TSS",
+              "derived_from": [],
+              "metrics": [
+                {"name": "Pbias", "target": 25.0, "weight": 1.0, "enabled": true},
+                {"name": "monthly_average", "target": 25.0, "weight": 0.5, "enabled": true}
+              ]
+            },
+            {
+              "name": "TP",
+              "derived_from": [],
+              "metrics": [
+                {"name": "Pbias", "target": 25.0, "weight": 1.0, "enabled": true}
+              ]
+            },
+            {
+              "name": "TP_load",
+              "derived_from": ["TP", "Q"],
+              "metrics": [
+                {"name": "Pbias", "target": 30.0, "weight": 1.0, "enabled": true}
+              ]
+            }
+          ],
+          "observation_summaries": [
+            {
+              "constituent": "TSS",
+              "start_year": 2005,
+              "end_year": 2020,
+              "avg_samples_per_year": 12.0,
+              "median_samples_per_year": 10.0,
+              "years_with_data": 15,
+              "total_samples": 180
+            },
+            {
+              "constituent": "TP",
+              "start_year": 2005,
+              "end_year": 2020,
+              "avg_samples_per_year": 12.0,
+              "median_samples_per_year": 10.0,
+              "years_with_data": 15,
+              "total_samples": 180
+            }
+          ]
+        }
+      ],
+      "watershed_constraints": [
+        {
+          "constituent": "TP",
+          "target_rate": 0.5,
+          "min_rate": 0.2,
+          "max_rate": 1.0,
+          "landcover_constraints": [
+            {
+              "landcover_type": "forest",
+              "constituent": "TP",
+              "target_rate": 0.1,
+              "min_rate": 0.05,
+              "max_rate": 0.2
+            },
+            {
+              "landcover_type": "agricultural",
+              "constituent": "TP",
+              "target_rate": 0.8,
+              "min_rate": 0.4,
+              "max_rate": 1.5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

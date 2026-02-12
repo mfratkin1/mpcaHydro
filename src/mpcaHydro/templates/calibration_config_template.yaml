@@ -1,0 +1,257 @@
+# HSPF Calibration Configuration Template
+# ========================================
+# This template defines calibration locations, stations, and metrics for HSPF models.
+# Users can customize this file and load it using calibration_config.load_config()
+
+# Configuration version
+version: "1.0"
+
+# Repository/Model name
+repository_name: "Clearwater"
+
+# Default metrics applied to all constituents unless overridden
+default_metrics:
+  - name: "NSE"
+    target: 0.5
+    weight: 1.0
+    enabled: true
+  - name: "logNSE"
+    target: 0.5
+    weight: 1.0
+    enabled: true
+  - name: "Pbias"
+    target: 10.0
+    weight: 1.0
+    enabled: true
+  - name: "monthly_average"
+    target: 15.0
+    weight: 0.5
+    enabled: true
+  - name: "annual_average"
+    target: 15.0
+    weight: 0.5
+    enabled: true
+  - name: "percentile_10"
+    target: 20.0
+    weight: 0.5
+    enabled: true
+  - name: "percentile_90"
+    target: 20.0
+    weight: 0.5
+    enabled: true
+  - name: "seasonal_average"
+    target: 15.0
+    weight: 0.5
+    enabled: true
+
+# Calibration locations
+# A location can have multiple stations grouped together
+locations:
+  - location_id: 1
+    location_name: "Clearwater Outlet"
+    repository_name: "Clearwater"
+    notes: "Main outlet combining flow and water quality stations"
+    
+    # Stations at this location
+    stations:
+      # Flow monitoring station (timeseries data)
+      - station_id: "E66050001"
+        station_origin: "wiski"
+        repository_name: "Clearwater"
+        true_reach_id: 650
+        reach_ids: [650]
+        upstream_reach_ids: [649, 648]
+        flow_station_ids: []  # No supplemental flow needed
+        comments: "Primary USGS flow monitoring station"
+        
+        # Constituents to calibrate
+        constituents:
+          - name: "Q"  # Flow
+            derived_from: []
+            metrics:
+              - name: "NSE"
+                target: 0.5
+                weight: 1.0
+                enabled: true
+              - name: "logNSE"
+                target: 0.5
+                weight: 1.0
+                enabled: true
+              - name: "Pbias"
+                target: 10.0
+                weight: 1.0
+                enabled: true
+              - name: "monthly_average"
+                target: 15.0
+                weight: 0.5
+                enabled: true
+              - name: "annual_average"
+                target: 15.0
+                weight: 0.5
+                enabled: true
+        
+        # Summary of available observation data
+        observation_summaries:
+          - constituent: "Q"
+            start_year: 2000
+            end_year: 2023
+            avg_samples_per_year: 365.0
+            median_samples_per_year: 365.0
+            years_with_data: 24
+            total_samples: 8760
+      
+      # Water quality monitoring station (discrete samples)
+      - station_id: "S002-118"
+        station_origin: "equis"
+        repository_name: "Clearwater"
+        true_reach_id: 650
+        reach_ids: [650]
+        upstream_reach_ids: [649, 648]
+        flow_station_ids: ["E66050001"]  # Use flow from another station
+        comments: "MPCA water quality monitoring station"
+        
+        constituents:
+          - name: "TSS"  # Total Suspended Solids
+            derived_from: []
+            metrics:
+              - name: "Pbias"
+                target: 25.0
+                weight: 1.0
+                enabled: true
+              - name: "monthly_average"
+                target: 25.0
+                weight: 0.5
+                enabled: true
+          
+          - name: "TP"  # Total Phosphorus
+            derived_from: []
+            metrics:
+              - name: "Pbias"
+                target: 25.0
+                weight: 1.0
+                enabled: true
+              - name: "monthly_average"
+                target: 25.0
+                weight: 0.5
+                enabled: true
+          
+          - name: "TP_load"  # Derived: load from concentration and flow
+            derived_from: ["TP", "Q"]
+            metrics:
+              - name: "Pbias"
+                target: 30.0
+                weight: 1.0
+                enabled: true
+        
+        observation_summaries:
+          - constituent: "TSS"
+            start_year: 2005
+            end_year: 2020
+            avg_samples_per_year: 12.0
+            median_samples_per_year: 10.0
+            years_with_data: 15
+            total_samples: 180
+          - constituent: "TP"
+            start_year: 2005
+            end_year: 2020
+            avg_samples_per_year: 12.0
+            median_samples_per_year: 10.0
+            years_with_data: 15
+            total_samples: 180
+    
+    # Watershed loading rate constraints
+    watershed_constraints:
+      - constituent: "TP"
+        target_rate: 0.5  # lbs/acre/year
+        min_rate: 0.2
+        max_rate: 1.0
+        landcover_constraints:
+          - landcover_type: "forest"
+            constituent: "TP"
+            target_rate: 0.1
+            min_rate: 0.05
+            max_rate: 0.2
+          - landcover_type: "agricultural"
+            constituent: "TP"
+            target_rate: 0.8
+            min_rate: 0.4
+            max_rate: 1.5
+          - landcover_type: "urban"
+            constituent: "TP"
+            target_rate: 0.6
+            min_rate: 0.3
+            max_rate: 1.0
+      
+      - constituent: "TSS"
+        target_rate: 100.0  # lbs/acre/year
+        min_rate: 50.0
+        max_rate: 200.0
+        landcover_constraints:
+          - landcover_type: "agricultural"
+            constituent: "TSS"
+            target_rate: 150.0
+            min_rate: 80.0
+            max_rate: 300.0
+
+  # Example: Another location with multiple stations for combined calibration
+  - location_id: 2
+    location_name: "Upstream Tributary"
+    repository_name: "Clearwater"
+    notes: "Multiple stations combined due to individually insufficient data"
+    
+    stations:
+      - station_id: "S002-119"
+        station_origin: "equis"
+        repository_name: "Clearwater"
+        true_reach_id: 640
+        reach_ids: [640, 641]
+        upstream_reach_ids: []
+        flow_station_ids: ["E66050002"]
+        comments: "Limited data but useful when combined"
+        
+        constituents:
+          - name: "TP"
+            derived_from: []
+            metrics:
+              - name: "Pbias"
+                target: 30.0
+                weight: 1.0
+                enabled: true
+        
+        observation_summaries:
+          - constituent: "TP"
+            start_year: 2010
+            end_year: 2018
+            avg_samples_per_year: 6.0
+            median_samples_per_year: 5.0
+            years_with_data: 8
+            total_samples: 48
+      
+      - station_id: "S002-120"
+        station_origin: "equis"
+        repository_name: "Clearwater"
+        true_reach_id: 642
+        reach_ids: [640, 641, 642]
+        upstream_reach_ids: []
+        flow_station_ids: ["E66050002"]
+        comments: "Limited data but useful when combined"
+        
+        constituents:
+          - name: "TP"
+            derived_from: []
+            metrics:
+              - name: "Pbias"
+                target: 30.0
+                weight: 1.0
+                enabled: true
+        
+        observation_summaries:
+          - constituent: "TP"
+            start_year: 2012
+            end_year: 2019
+            avg_samples_per_year: 8.0
+            median_samples_per_year: 7.0
+            years_with_data: 7
+            total_samples: 56
+    
+    watershed_constraints: []
