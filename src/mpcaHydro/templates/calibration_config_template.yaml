@@ -50,6 +50,11 @@ locations:
   - location_id: 1
     location_name: "Clearwater Outlet"
     repository_name: "Clearwater"
+    # Reach mappings are at the location level - shared by all stations
+    reach_ids: [650]
+    upstream_reach_ids: [649, 648]
+    # Flow station IDs for load calculations (at location level)
+    flow_station_ids: ["E66050001"]
     notes: "Main outlet combining flow and water quality stations"
     
     # Stations at this location
@@ -59,9 +64,6 @@ locations:
         station_origin: "wiski"
         repository_name: "Clearwater"
         true_reach_id: 650
-        reach_ids: [650]
-        upstream_reach_ids: [649, 648]
-        flow_station_ids: []  # No supplemental flow needed
         comments: "Primary USGS flow monitoring station"
         
         # Constituents to calibrate
@@ -91,7 +93,7 @@ locations:
                 enabled: true
         
         # Summary of available observation data
-        observation_summaries:
+        observations:
           - constituent: "Q"
             start_year: 2000
             end_year: 2023
@@ -105,9 +107,6 @@ locations:
         station_origin: "equis"
         repository_name: "Clearwater"
         true_reach_id: 650
-        reach_ids: [650]
-        upstream_reach_ids: [649, 648]
-        flow_station_ids: ["E66050001"]  # Use flow from another station
         comments: "MPCA water quality monitoring station"
         
         constituents:
@@ -143,7 +142,7 @@ locations:
                 weight: 1.0
                 enabled: true
         
-        observation_summaries:
+        observations:
           - constituent: "TSS"
             start_year: 2005
             end_year: 2020
@@ -197,6 +196,10 @@ locations:
   - location_id: 2
     location_name: "Upstream Tributary"
     repository_name: "Clearwater"
+    # Reach mappings at location level for combining multiple stations
+    reach_ids: [640, 641, 642]
+    upstream_reach_ids: []
+    flow_station_ids: ["E66050002"]
     notes: "Multiple stations combined due to individually insufficient data"
     
     stations:
@@ -204,9 +207,6 @@ locations:
         station_origin: "equis"
         repository_name: "Clearwater"
         true_reach_id: 640
-        reach_ids: [640, 641]
-        upstream_reach_ids: []
-        flow_station_ids: ["E66050002"]
         comments: "Limited data but useful when combined"
         
         constituents:
@@ -218,7 +218,7 @@ locations:
                 weight: 1.0
                 enabled: true
         
-        observation_summaries:
+        observations:
           - constituent: "TP"
             start_year: 2010
             end_year: 2018
@@ -231,9 +231,6 @@ locations:
         station_origin: "equis"
         repository_name: "Clearwater"
         true_reach_id: 642
-        reach_ids: [640, 641, 642]
-        upstream_reach_ids: []
-        flow_station_ids: ["E66050002"]
         comments: "Limited data but useful when combined"
         
         constituents:
@@ -245,7 +242,7 @@ locations:
                 weight: 1.0
                 enabled: true
         
-        observation_summaries:
+        observations:
           - constituent: "TP"
             start_year: 2012
             end_year: 2019

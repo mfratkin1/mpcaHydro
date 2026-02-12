@@ -16,6 +16,9 @@
       "location_id": 1,
       "location_name": "Clearwater Outlet",
       "repository_name": "Clearwater",
+      "reach_ids": [650],
+      "upstream_reach_ids": [649, 648],
+      "flow_station_ids": ["E66050001"],
       "notes": "Main outlet combining flow and water quality stations",
       "stations": [
         {
@@ -23,9 +26,6 @@
           "station_origin": "wiski",
           "repository_name": "Clearwater",
           "true_reach_id": 650,
-          "reach_ids": [650],
-          "upstream_reach_ids": [649, 648],
-          "flow_station_ids": [],
           "comments": "Primary USGS flow monitoring station",
           "constituents": [
             {
@@ -38,7 +38,7 @@
               ]
             }
           ],
-          "observation_summaries": [
+          "observations": [
             {
               "constituent": "Q",
               "start_year": 2000,
@@ -55,9 +55,6 @@
           "station_origin": "equis",
           "repository_name": "Clearwater",
           "true_reach_id": 650,
-          "reach_ids": [650],
-          "upstream_reach_ids": [649, 648],
-          "flow_station_ids": ["E66050001"],
           "comments": "MPCA water quality monitoring station",
           "constituents": [
             {
@@ -83,7 +80,7 @@
               ]
             }
           ],
-          "observation_summaries": [
+          "observations": [
             {
               "constituent": "TSS",
               "start_year": 2005,
