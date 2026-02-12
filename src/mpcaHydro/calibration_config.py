@@ -15,7 +15,7 @@ Users can pass in configuration files (YAML or JSON) to customize the calibratio
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 import json
 
 try:
@@ -78,8 +78,8 @@ class ConstituentConfig:
                      (e.g., load derived from flow and concentration)
     """
     name: str
-    metrics: list[Metric] = field(default_factory=list)
-    derived_from: list[str] = field(default_factory=list)
+    metrics: List[Metric] = field(default_factory=list)
+    derived_from: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -198,7 +198,7 @@ class WatershedConstraint:
     target_rate: Optional[float] = None
     min_rate: Optional[float] = None
     max_rate: Optional[float] = None
-    landcover_constraints: list[LandcoverConstraint] = field(default_factory=list)
+    landcover_constraints: List[LandcoverConstraint] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -245,11 +245,11 @@ class Station:
     station_origin: str
     repository_name: str
     true_reach_id: Optional[int] = None
-    reach_ids: list[int] = field(default_factory=list)
-    upstream_reach_ids: list[int] = field(default_factory=list)
-    constituents: list[ConstituentConfig] = field(default_factory=list)
-    observation_summaries: list[ObservationSummary] = field(default_factory=list)
-    flow_station_ids: list[str] = field(default_factory=list)
+    reach_ids: List[int] = field(default_factory=list)
+    upstream_reach_ids: List[int] = field(default_factory=list)
+    constituents: List[ConstituentConfig] = field(default_factory=list)
+    observation_summaries: List[ObservationSummary] = field(default_factory=list)
+    flow_station_ids: List[str] = field(default_factory=list)
     comments: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -310,8 +310,8 @@ class Location:
     location_id: int
     location_name: str
     repository_name: str
-    stations: list[Station] = field(default_factory=list)
-    watershed_constraints: list[WatershedConstraint] = field(default_factory=list)
+    stations: List[Station] = field(default_factory=list)
+    watershed_constraints: List[WatershedConstraint] = field(default_factory=list)
     notes: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -340,14 +340,14 @@ class Location:
             notes=data.get('notes')
         )
 
-    def get_all_reach_ids(self) -> list[int]:
+    def get_all_reach_ids(self) -> List[int]:
         """Get all reach IDs from all stations at this location."""
         reach_ids = set()
         for station in self.stations:
             reach_ids.update(station.reach_ids)
         return list(reach_ids)
 
-    def get_all_station_ids(self) -> list[str]:
+    def get_all_station_ids(self) -> List[str]:
         """Get all station IDs at this location."""
         return [station.station_id for station in self.stations]
 
@@ -364,8 +364,8 @@ class CalibrationConfig:
         version: Configuration version for tracking changes
     """
     repository_name: str
-    locations: list[Location] = field(default_factory=list)
-    default_metrics: list[Metric] = field(default_factory=list)
+    locations: List[Location] = field(default_factory=list)
+    default_metrics: List[Metric] = field(default_factory=list)
     version: str = "1.0"
 
     def to_dict(self) -> dict:
@@ -404,7 +404,7 @@ class CalibrationConfig:
                 return loc
         return None
 
-    def get_all_stations(self) -> list[Station]:
+    def get_all_stations(self) -> List[Station]:
         """Get all stations across all locations."""
         stations = []
         for loc in self.locations:
@@ -416,7 +416,7 @@ class CalibrationConfig:
 # Default Metrics Configuration
 # ============================================================================
 
-def get_default_timeseries_metrics() -> list[Metric]:
+def get_default_timeseries_metrics() -> List[Metric]:
     """
     Get default metrics for timeseries observations (e.g., flow).
     """
@@ -432,7 +432,7 @@ def get_default_timeseries_metrics() -> list[Metric]:
     ]
 
 
-def get_default_discrete_metrics() -> list[Metric]:
+def get_default_discrete_metrics() -> List[Metric]:
     """
     Get default metrics for discrete sample observations (e.g., water quality).
     """
@@ -1196,7 +1196,7 @@ class CalibrationManager:
         """Get a location by ID."""
         return self.config.get_location_by_id(location_id)
     
-    def get_all_stations(self) -> list[Station]:
+    def get_all_stations(self) -> List[Station]:
         """Get all stations across all locations."""
         return self.config.get_all_stations()
     
