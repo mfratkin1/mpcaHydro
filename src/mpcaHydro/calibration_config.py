@@ -43,8 +43,28 @@ from mpcaHydro.calibration_io import (
     CALIBRATION_SCHEMA,
 )
 
+# Import procedural functions
+from mpcaHydro.calibration_functions import (
+    create_config,
+    load_config_from_file,
+    save_config_to_file,
+    load_from_db,
+    save_to_db,
+    add_location,
+    get_location_by_id as get_location,
+    get_location_by_name,
+    get_all_stations,
+    get_all_station_ids,
+    get_all_reach_ids,
+    stations_to_dataframe,
+    locations_to_dataframe,
+    config_to_dict,
+    config_from_dict,
+)
+
 # Re-export for backwards compatibility
 __all__ = [
+    # Data classes
     'Metric',
     'Observation', 
     'LandcoverConstraint',
@@ -53,15 +73,34 @@ __all__ = [
     'Station',
     'Location',
     'CalibrationConfig',
+    # Default metrics helpers
     'get_default_timeseries_metrics',
     'get_default_discrete_metrics',
+    # I/O functions (original)
     'load_config',
     'save_config',
     'init_calibration_db',
     'save_config_to_db',
     'load_config_from_db',
-    'CalibrationManager',
     'CALIBRATION_SCHEMA',
+    # Manager class
+    'CalibrationManager',
+    # Procedural functions
+    'create_config',
+    'load_config_from_file',
+    'save_config_to_file',
+    'load_from_db',
+    'save_to_db',
+    'add_location',
+    'get_location',
+    'get_location_by_name',
+    'get_all_stations',
+    'get_all_station_ids',
+    'get_all_reach_ids',
+    'stations_to_dataframe',
+    'locations_to_dataframe',
+    'config_to_dict',
+    'config_from_dict',
 ]
 
 
