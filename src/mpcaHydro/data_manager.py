@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Jun  3 10:01:14 2022
-
-@author: mfratki
-"""
+"""Data manager module for managing observation data warehouse."""
 
 #from abc import abstractmethod
 from pathlib import Path
@@ -14,20 +10,63 @@ from mpcaHydro import outlets
 from mpcaHydro.reports import reportManager
 import duckdb
 
-AGG_DEFAULTS = {'cfs':'mean',
-                'mg/l':'mean',
-                'degf': 'mean',
-                'lb':'sum'}
+# Import procedural functions
+from mpcaHydro.data_manager_functions import (
+    get_db_path,
+    init_warehouse,
+    update_views,
+    process_wiski_data,
+    process_equis_data,
+    process_all_data,
+    download_wiski_data,
+    download_equis_data,
+    get_outlets,
+    get_station_ids,
+    get_observation_data,
+    get_outlet_data,
+    get_station_data,
+    get_raw_data,
+    get_constituent_summary,
+    export_station_to_csv,
+    export_raw_to_csv,
+    get_equis_template,
+    get_wiski_template,
+    AGG_DEFAULTS,
+    UNIT_DEFAULTS,
+)
 
-UNIT_DEFAULTS = {'Q': 'cfs',
-                 'QB': 'cfs',
-                 'TSS': 'mg/l',
-                 'TP' : 'mg/l',
-                 'OP' : 'mg/l',
-                 'TKN': 'mg/l',
-                 'N'  : 'mg/l',
-                 'WT' : 'degf',
-                 'WL' : 'ft'}
+# Re-export for backwards compatibility
+__all__ = [
+    # Class
+    'dataManager',
+    # Existing module-level functions
+    'validate_constituent',
+    'validate_unit',
+    'build_warehouse',
+    'constituent_summary',
+    # Procedural functions
+    'get_db_path',
+    'init_warehouse',
+    'update_views',
+    'process_wiski_data',
+    'process_equis_data',
+    'process_all_data',
+    'download_wiski_data',
+    'download_equis_data',
+    'get_outlets',
+    'get_station_ids',
+    'get_observation_data',
+    'get_outlet_data',
+    'get_station_data',
+    'get_raw_data',
+    'get_constituent_summary',
+    'export_station_to_csv',
+    'export_raw_to_csv',
+    'get_equis_template',
+    'get_wiski_template',
+    'AGG_DEFAULTS',
+    'UNIT_DEFAULTS',
+]
 
 
 def validate_constituent(constituent):
