@@ -5,7 +5,7 @@ Tests for the calibration_config module.
 This module tests the calibration configuration system including:
 - Data classes (Location, Station, Observation, Metric, etc.)
 - Configuration file loading/saving (YAML, JSON, TOML)
-- Database integration
+- SQLite database integration
 """
 
 import json
@@ -28,11 +28,13 @@ from mpcaHydro.calibration_config import (
     get_default_discrete_metrics,
     load_config,
     save_config,
-    create_example_config,
     init_calibration_db,
     save_config_to_db,
     load_config_from_db,
 )
+
+# Import example helper from examples module
+from mpcaHydro.examples.example_database import create_example_config
 
 
 class TestMetric:
@@ -339,23 +341,21 @@ class TestConfigFileSerialization:
 
 
 class TestDatabaseIntegration:
-    """Tests for database integration."""
+    """Tests for SQLite database integration."""
     
-    @pytest.mark.skip(reason="Database integration requires outlets module with data files")
     def test_init_calibration_db(self):
         """Test initializing calibration database schema."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / 'test.duckdb'
+            db_path = Path(tmpdir) / 'test.sqlite'
             init_calibration_db(db_path)
             assert db_path.exists()
     
-    @pytest.mark.skip(reason="Database integration requires outlets module with data files")
     def test_save_and_load_from_db(self):
         """Test saving and loading configuration from database."""
         config = create_example_config('TestRepo')
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / 'test.duckdb'
+            db_path = Path(tmpdir) / 'test.sqlite'
             init_calibration_db(db_path)
             save_config_to_db(config, db_path)
             
@@ -372,17 +372,18 @@ class TestCalibrationManager:
         manager = CalibrationManager(repository_name='Test')
         assert manager.repository_name == 'Test'
     
-    def test_manager_create_example(self):
-        """Test creating example config through manager."""
+    def test_manager_set_config(self):
+        """Test setting config through manager."""
         manager = CalibrationManager(repository_name='Test')
-        config = manager.create_example_config()
-        assert config.repository_name == 'Test'
-        assert len(config.locations) == 1
+        config = create_example_config('Test')
+        manager._config = config
+        assert manager.config.repository_name == 'Test'
+        assert len(manager.config.locations) == 1
     
     def test_manager_get_stations_as_dataframe(self):
         """Test getting stations as DataFrame."""
         manager = CalibrationManager(repository_name='Test')
-        manager.create_example_config()
+        manager._config = create_example_config('Test')
         df = manager.get_stations_as_dataframe()
         assert len(df) == 2
         assert 'station_id' in df.columns
@@ -390,7 +391,7 @@ class TestCalibrationManager:
     def test_manager_get_locations_as_dataframe(self):
         """Test getting locations as DataFrame."""
         manager = CalibrationManager(repository_name='Test')
-        manager.create_example_config()
+        manager._config = create_example_config('Test')
         df = manager.get_locations_as_dataframe()
         assert len(df) == 1
         assert 'location_name' in df.columns
