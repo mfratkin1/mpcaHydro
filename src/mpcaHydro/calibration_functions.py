@@ -104,10 +104,10 @@ def locations_to_dataframe(config: CalibrationConfig) -> pd.DataFrame:
             'location_id': location.location_id,
             'location_name': location.location_name,
             'repository_name': location.repository_name,
-            'reach_ids': ','.join(str(r) for r in location.reach_ids),
-            'upstream_reach_ids': ','.join(str(r) for r in location.upstream_reach_ids),
-            'flow_station_ids': ','.join(location.flow_station_ids),
-            'station_count': len(location.stations),
+            'reach_ids': ','.join(str(r) for r in (location.reach_ids or [])),
+            'upstream_reach_ids': ','.join(str(r) for r in (location.upstream_reach_ids or [])),
+            'flow_station_ids': ','.join(location.flow_station_ids or []),
+            'station_count': len(location.stations or []),
             'station_ids': ','.join(location.get_all_station_ids()),
             'notes': location.notes
         })
