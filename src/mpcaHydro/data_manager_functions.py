@@ -41,51 +41,48 @@ def init_warehouse(folderpath: Union[str, Path], reset: bool = False) -> Path:
     return db_path
 
 
-def update_views(db_path: Union[str, Path]) -> None:
+def update_views(con: duckdb.DuckDBPyConnection) -> None:
     """Update all database views."""
     from mpcaHydro import warehouse
-    with warehouse.connect(db_path, read_only=False) as con:
-        warehouse.update_views(con)
+    warehouse.update_views(con)
 
 
 def process_wiski_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     filter_qc_codes: bool = True,
     data_codes: Optional[List[int]] = None,
     baseflow_method: str = 'Boughton'
 ) -> None:
     """Process WISKI data from staging to analytics."""
     from mpcaHydro import wiski, warehouse
-    with warehouse.connect(db_path, read_only=False) as con:
-        df = con.execute("SELECT * FROM staging.wiski").df()
-        df_transformed = wiski.transform(df, filter_qc_codes, data_codes, baseflow_method)
-        warehouse.load_df_to_table(con, df_transformed, 'analytics.wiski')
-        warehouse.update_views(con)
+    df = con.execute("SELECT * FROM staging.wiski").df()
+    df_transformed = wiski.transform(df, filter_qc_codes, data_codes, baseflow_method)
+    warehouse.load_df_to_table(con, df_transformed, 'analytics.wiski')
+    warehouse.update_views(con)
 
 
-def process_equis_data(db_path: Union[str, Path]) -> None:
+def process_equis_data(con: duckdb.DuckDBPyConnection) -> None:
     """Process EQuIS data from staging to analytics."""
     from mpcaHydro import equis, warehouse
-    with warehouse.connect(db_path, read_only=False) as con:
-        df = con.execute("SELECT * FROM staging.equis").df()
-        df_transformed = equis.transform(df)
-        warehouse.load_df_to_table(con, df_transformed, 'analytics.equis')
-        warehouse.update_views(con)
+    df = con.execute("SELECT * FROM staging.equis").df()
+    df_transformed = equis.transform(df)
+    warehouse.load_df_to_table(con, df_transformed, 'analytics.equis')
+    warehouse.update_views(con)
 
 
 def process_all_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     filter_qc_codes: bool = True,
     data_codes: Optional[List[int]] = None,
     baseflow_method: str = 'Boughton'
 ) -> None:
     """Process all data (WISKI and EQuIS) from staging to analytics."""
-    process_wiski_data(db_path, filter_qc_codes, data_codes, baseflow_method)
-    process_equis_data(db_path)
+    process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
+    process_equis_data(con)
 
 
 def download_wiski_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_ids: List[str],
     start_year: int = 1996,
     end_year: int = 2030,
@@ -95,22 +92,21 @@ def download_wiski_data(
 ) -> None:
     """Download WISKI data for given station IDs and load into the warehouse."""
     from mpcaHydro import wiski, warehouse
-    with warehouse.connect(db_path, read_only=False) as con:
-        df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
-        if not df.empty:
-            warehouse.load_df_to_table(con, df, 'staging.wiski')
-            warehouse.load_df_to_table(
-                con,
-                wiski.transform(df, filter_qc_codes, data_codes, baseflow_method),
-                'analytics.wiski'
-            )
-            warehouse.update_views(con)
-        else:
-            print('No data necessary for HSPF calibration from wiski for:', station_ids)
+    df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
+    if not df.empty:
+        warehouse.load_df_to_table(con, df, 'staging.wiski')
+        warehouse.load_df_to_table(
+            con,
+            wiski.transform(df, filter_qc_codes, data_codes, baseflow_method),
+            'analytics.wiski'
+        )
+        warehouse.update_views(con)
+    else:
+        print('No data necessary for HSPF calibration from wiski for:', station_ids)
 
 
 def download_equis_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_ids: List[str],
     oracle_username: str,
     oracle_password: str
@@ -119,60 +115,56 @@ def download_equis_data(
     from mpcaHydro import equis, warehouse
     equis.connect(user=oracle_username, password=oracle_password)
     print('Connected to Oracle database.')
-    with warehouse.connect(db_path, read_only=False) as con:
-        df = equis.download(station_ids)
-        if not df.empty:
-            warehouse.load_df_to_table(con, df, 'staging.equis')
-            warehouse.load_df_to_table(con, equis.transform(df.copy()), 'analytics.equis')
-            warehouse.update_views(con)
-        else:
-            print('No data necessary for HSPF calibration from equis for:', station_ids)
+    df = equis.download(station_ids)
+    if not df.empty:
+        warehouse.load_df_to_table(con, df, 'staging.equis')
+        warehouse.load_df_to_table(con, equis.transform(df.copy()), 'analytics.equis')
+        warehouse.update_views(con)
+    else:
+        print('No data necessary for HSPF calibration from equis for:', station_ids)
 
 
-def get_outlets(db_path: Union[str, Path], model_name: str) -> pd.DataFrame:
+def get_outlets(con: duckdb.DuckDBPyConnection, model_name: str) -> pd.DataFrame:
     """Get outlet data for a given model."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''
-        SELECT *
-        FROM outlets.station_reach_pairs
-        WHERE repository_name = ?
-        ORDER BY outlet_id'''
-        return con.execute(query, [model_name]).fetch_df()
+    query = '''
+    SELECT *
+    FROM outlets.station_reach_pairs
+    WHERE repository_name = ?
+    ORDER BY outlet_id'''
+    return con.execute(query, [model_name]).fetch_df()
 
 
 def get_station_ids(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_origin: Optional[str] = None
 ) -> List[str]:
     """Get list of station IDs, optionally filtered by origin."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        if station_origin is None:
-            query = '''
-            SELECT DISTINCT station_id, station_origin
-            FROM analytics.observations'''
-            df = con.execute(query).fetch_df()
-        else:
-            query = '''
-            SELECT DISTINCT station_id
-            FROM analytics.observations
-            WHERE station_origin = ?'''
-            df = con.execute(query, [station_origin]).fetch_df()
+    if station_origin is None:
+        query = '''
+        SELECT DISTINCT station_id, station_origin
+        FROM analytics.observations'''
+        df = con.execute(query).fetch_df()
+    else:
+        query = '''
+        SELECT DISTINCT station_id
+        FROM analytics.observations
+        WHERE station_origin = ?'''
+        df = con.execute(query, [station_origin]).fetch_df()
     return df['station_id'].to_list()
 
 
 def get_observation_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_ids: List[str],
     constituent: str,
     agg_period: Optional[str] = None
 ) -> pd.DataFrame:
     """Get observation data for given stations and constituent."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''
-        SELECT *
-        FROM analytics.observations
-        WHERE station_id IN ? AND constituent = ?'''
-        df = con.execute(query, [station_ids, constituent]).fetch_df()
+    query = '''
+    SELECT *
+    FROM analytics.observations
+    WHERE station_id IN ? AND constituent = ?'''
+    df = con.execute(query, [station_ids, constituent]).fetch_df()
 
     unit = UNIT_DEFAULTS.get(constituent, 'mg/l')
     agg_func = AGG_DEFAULTS.get(unit, 'mean')
@@ -190,18 +182,17 @@ def get_observation_data(
 
 
 def get_outlet_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     outlet_id: int,
     constituent: str,
     agg_period: str = 'D'
 ) -> pd.DataFrame:
     """Get outlet observation data with flow for a given outlet and constituent."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''
-        SELECT *
-        FROM analytics.outlet_observations_with_flow
-        WHERE outlet_id = ? AND constituent = ?'''
-        df = con.execute(query, [outlet_id, constituent]).fetch_df()
+    query = '''
+    SELECT *
+    FROM analytics.outlet_observations_with_flow
+    WHERE outlet_id = ? AND constituent = ?'''
+    df = con.execute(query, [outlet_id, constituent]).fetch_df()
 
     unit = UNIT_DEFAULTS.get(constituent, 'mg/l')
     agg_func = AGG_DEFAULTS.get(unit, 'mean')
@@ -223,92 +214,87 @@ def get_outlet_data(
 
 
 def get_station_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_id: str,
     station_origin: str
 ) -> pd.DataFrame:
     """Get all observation data for a specific station."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''
-        SELECT *
-        FROM analytics.observations
-        WHERE station_id = ? AND station_origin = ?'''
-        return con.execute(query, [station_id, station_origin]).fetch_df()
+    query = '''
+    SELECT *
+    FROM analytics.observations
+    WHERE station_id = ? AND station_origin = ?'''
+    return con.execute(query, [station_id, station_origin]).fetch_df()
 
 
 def get_raw_data(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_id: str,
     station_origin: str
 ) -> pd.DataFrame:
     """Get raw staging data for a specific station."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        if station_origin.lower() == 'equis':
-            query = '''
-            SELECT *
-            FROM staging.equis_raw
-            WHERE station_id = ?'''
-        elif station_origin.lower() == 'wiski':
-            query = '''
-            SELECT *
-            FROM staging.wiski_raw
-            WHERE station_id = ?'''
-        else:
-            raise ValueError(f'Station origin {station_origin} not recognized.')
-        return con.execute(query, [station_id]).fetch_df()
-
-
-def get_constituent_summary(db_path: Union[str, Path]) -> pd.DataFrame:
-    """Get summary of constituents across all stations."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
+    if station_origin.lower() == 'equis':
         query = '''
-        SELECT
-          station_id,
-          station_origin,
-          constituent,
-          COUNT(*) AS sample_count,
-          year(MIN(datetime)) AS start_date,
-          year(MAX(datetime)) AS end_date
-        FROM
-          analytics.observations
-        GROUP BY
-          constituent, station_id, station_origin
-        ORDER BY
-          sample_count'''
-        return con.execute(query).fetch_df()
+        SELECT *
+        FROM staging.equis_raw
+        WHERE station_id = ?'''
+    elif station_origin.lower() == 'wiski':
+        query = '''
+        SELECT *
+        FROM staging.wiski_raw
+        WHERE station_id = ?'''
+    else:
+        raise ValueError(f'Station origin {station_origin} not recognized.')
+    return con.execute(query, [station_id]).fetch_df()
+
+
+def get_constituent_summary(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """Get summary of constituents across all stations."""
+    query = '''
+    SELECT
+      station_id,
+      station_origin,
+      constituent,
+      COUNT(*) AS sample_count,
+      year(MIN(datetime)) AS start_date,
+      year(MAX(datetime)) AS end_date
+    FROM
+      analytics.observations
+    GROUP BY
+      constituent, station_id, station_origin
+    ORDER BY
+      sample_count'''
+    return con.execute(query).fetch_df()
 
 
 def export_station_to_csv(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_id: str,
     station_origin: str,
     output_path: Union[str, Path]
 ) -> None:
     """Export station data to a CSV file."""
-    df = get_station_data(db_path, station_id, station_origin)
+    df = get_station_data(con, station_id, station_origin)
     df.to_csv(output_path, index=False)
 
 
 def export_raw_to_csv(
-    db_path: Union[str, Path],
+    con: duckdb.DuckDBPyConnection,
     station_id: str,
     station_origin: str,
     output_path: Union[str, Path]
 ) -> None:
     """Export raw staging data to a CSV file."""
-    df = get_raw_data(db_path, station_id, station_origin)
+    df = get_raw_data(con, station_id, station_origin)
     df.to_csv(output_path, index=False)
 
 
-def get_equis_template(db_path: Union[str, Path]) -> pd.DataFrame:
+def get_equis_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """Get an empty DataFrame with EQuIS staging table schema."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''SELECT * FROM staging.equis LIMIT 0'''
-        return con.execute(query).fetch_df()
+    query = '''SELECT * FROM staging.equis LIMIT 0'''
+    return con.execute(query).fetch_df()
 
 
-def get_wiski_template(db_path: Union[str, Path]) -> pd.DataFrame:
+def get_wiski_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """Get an empty DataFrame with WISKI staging table schema."""
-    with duckdb.connect(str(db_path), read_only=True) as con:
-        query = '''SELECT * FROM staging.wiski LIMIT 0'''
-        return con.execute(query).fetch_df()
+    query = '''SELECT * FROM staging.wiski LIMIT 0'''
+    return con.execute(query).fetch_df()

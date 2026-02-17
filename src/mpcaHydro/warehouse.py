@@ -2,11 +2,10 @@ import duckdb
 import pandas as pd
 from pathlib import Path
 from mpcaHydro import outlets
+from mpcaHydro import sql_loader
 
 def init_db(db_path: str,reset: bool = False):
-    """
-    Initialize the DuckDB database: create schemas and tables.
-    """
+    """Initialize the DuckDB database: create schemas and tables."""
     db_path = Path(db_path)
     if reset and db_path.exists():
         db_path.unlink()
@@ -28,138 +27,20 @@ def init_db(db_path: str,reset: bool = False):
 
 
 def create_schemas(con: duckdb.DuckDBPyConnection):
-    """
-    Create staging, analytics, hspf, and reports schemas if they do not exist.
-    """
-    con.execute("CREATE SCHEMA IF NOT EXISTS staging")
-    con.execute("CREATE SCHEMA IF NOT EXISTS analytics")
-    con.execute("CREATE SCHEMA IF NOT EXISTS reports")
-    con.execute("CREATE SCHEMA IF NOT EXISTS outlets")
-    con.execute("CREATE SCHEMA IF NOT EXISTS mappings")
+    """Create staging, analytics, hspf, and reports schemas if they do not exist."""
+    con.execute(sql_loader.get_schemas_sql())
 
 def create_staging_tables(con: duckdb.DuckDBPyConnection):
-    '''
-    Create necessary tables in the staging schema. These were copied directly from database DDL. Would need to be updated if sources change.
-    '''
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS staging.equis(
-                LATITUDE DOUBLE,
-                LONGITUDE DOUBLE,
-                WID_LIST VARCHAR,
-                SAMPLE_METHOD VARCHAR,
-                SAMPLE_REMARK VARCHAR,
-                FACILITY_ID BIGINT,
-                FACILITY_NAME VARCHAR,
-                FACILITY_TYPE VARCHAR,
-                SYS_LOC_CODE VARCHAR,
-                LOC_NAME VARCHAR,
-                LOC_TYPE VARCHAR,
-                LOC_TYPE_2 VARCHAR,
-                TASK_CODE VARCHAR,
-                SAMPLE_ID BIGINT,
-                SYS_SAMPLE_CODE VARCHAR,
-                TEST_ID BIGINT,
-                ANALYTE_TYPE VARCHAR,
-                ANALYTE_TYPE_DESC VARCHAR,
-                ANALYTIC_METHOD VARCHAR,
-                PREFERRED_NAME VARCHAR,
-                PARAMETER VARCHAR,
-                CAS_RN VARCHAR,
-                CHEMICAL_NAME VARCHAR,
-                GTLT VARCHAR,
-                RESULT_TEXT VARCHAR,
-                RESULT_NUMERIC DOUBLE,
-                RESULT_UNIT VARCHAR,
-                STAT_TYPE INTEGER,
-                VALUE_TYPE VARCHAR,
-                DETECT_FLAG VARCHAR,
-                DETECT_DESC VARCHAR,
-                RESULT_REMARK VARCHAR,
-                RESULT_TYPE_CODE VARCHAR,
-                METHOD_DETECTION_LIMIT VARCHAR,
-                REPORTING_DETECTION_LIMIT VARCHAR,
-                QUANTITATION_LIMIT INTEGER,
-                LAB_QUALIFIERS VARCHAR,
-                INTERPRETED_QUALIFIERS VARCHAR,
-                REPORTABLE_RESULT VARCHAR,
-                APPROVAL_CODE VARCHAR,
-                SENSITIVE_NOTPUBLIC VARCHAR,
-                TEST_TYPE VARCHAR,
-                DILUTION_FACTOR DOUBLE,
-                FRACTION VARCHAR,
-                BASIS VARCHAR,
-                TEMP_BASIS VARCHAR,
-                TEST_REMARK VARCHAR,
-                ANALYSIS_DATE_TIME TIMESTAMP_NS,
-                ANALYSIS_DATE VARCHAR,
-                ANALYSIS_TIME VARCHAR,
-                ANALYSIS_DATE_TIMEZONE VARCHAR,
-                COMPANY_NAME VARCHAR,
-                LAB_NAME_CODE VARCHAR,
-                LAB_SAMPLE_ID VARCHAR,
-                SAMPLE_TYPE_GROUP VARCHAR,
-                SAMPLE_TYPE_CODE VARCHAR,
-                SAMPLE_TYPE_DESC VARCHAR,
-                MEDIUM_CODE VARCHAR,
-                MATRIX_CODE VARCHAR,
-                START_DEPTH DOUBLE,
-                DEPTH_UNIT VARCHAR,
-                SAMPLE_DATE_TIME TIMESTAMP_NS,
-                SAMPLE_DATE VARCHAR,
-                SAMPLE_TIME VARCHAR,
-                SAMPLE_DATE_TIMEZONE VARCHAR,
-                EBATCH DOUBLE);
-    """)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS staging.wiski(
-                "Timestamp" VARCHAR,
-                "Value" DOUBLE,
-                "Quality Code" BIGINT,
-                "Quality Code Name" VARCHAR,
-                ts_unitsymbol VARCHAR,
-                ts_name VARCHAR,
-                ts_id VARCHAR,
-                station_no VARCHAR,
-                station_name VARCHAR,
-                station_latitude VARCHAR,
-                station_longitude VARCHAR,
-                parametertype_id VARCHAR,
-                parametertype_name VARCHAR,
-                stationparameter_no VARCHAR,
-                stationparameter_name VARCHAR,
-                wplmn_flag BIGINT);
-    """)
+    """Create necessary tables in the staging schema."""
+    con.execute(sql_loader.get_staging_tables_sql())
 
 
 def create_analytics_tables(con: duckdb.DuckDBPyConnection):
-    """
-    Create necessary tables in the analytics schema.
-    """
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS analytics.equis (
-        datetime TIMESTAMP,
-        value DOUBLE,
-        station_id TEXT,
-        station_origin TEXT,
-        constituent TEXT,
-        unit TEXT
-    );
-    """)
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS analytics.wiski (
-        datetime TIMESTAMP,
-        value DOUBLE,
-        station_id TEXT,
-        station_origin TEXT,
-        constituent TEXT,
-        unit TEXT
-    );
-    """)
+    """Create necessary tables in the analytics schema."""
+    con.execute(sql_loader.get_analytics_tables_sql())
 
 def create_mapping_tables(con: duckdb.DuckDBPyConnection):
-    """
-    Create and populate tables in the mappings schema from Python dicts and CSVs.
-    """
+    """Create and populate tables in the mappings schema from Python dicts and CSVs."""
     # WISKI parametertype_id -> constituent
     wiski_parametertype_map = {
         '11522': 'TP', 
@@ -200,7 +81,6 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
     con.execute("CREATE TABLE IF NOT EXISTS mappings.equis_casrn AS SELECT * FROM df_equis_cas")
 
     # Load station cross-reference from CSV
-    # Assumes this script is run from a location where this relative path is valid
     xref_csv_path = Path(__file__).parent / 'data/WISKI_EQUIS_XREF.csv'
     if xref_csv_path.exists():
         con.execute(f"CREATE TABLE IF NOT EXISTS mappings.station_xref AS SELECT * FROM read_csv_auto('{xref_csv_path.as_posix()}')")
@@ -212,73 +92,29 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
     if wiski_qc_csv_path.exists():
         con.execute(f"CREATE TABLE IF NOT EXISTS mappings.wiski_quality_codes AS SELECT * FROM read_csv_auto('{wiski_qc_csv_path.as_posix()}')")
     else:
-            print(f"Warning: WISKI_QUALITY_CODES.csv not found at {wiski_qc_csv_path}")
+        print(f"Warning: WISKI_QUALITY_CODES.csv not found at {wiski_qc_csv_path}")
 
 def create_outlets_tables(con: duckdb.DuckDBPyConnection):
-    """
-    Create tables in the outlets schema to define outlet-station-reach relationships.Copies from outlets module.
-    """
-    query = outlets.OUTLETS_SCHEMA
-    con.execute(query)
+    """Create tables in the outlets schema to define outlet-station-reach relationships."""
+    con.execute(sql_loader.get_outlets_schema_sql())
+    con.execute(sql_loader.get_views_outlets_sql())
     outlets.build_outlets(con)
-
-def create_normalized_wiski_view(con: duckdb.DuckDBPyConnection):
-    """
-    Create a view in the database that contains normalized WISKI data.
-    Units converted to standard units.
-    columns renamed.
-    constituents mapped.
-    """
-    con.execute("""
-    -- Create a single view with all transformations
-    CREATE OR REPLACE VIEW analytics.wiski_normalized AS
-    SELECT 
-        
-        -- Convert °C to °F and keep other values unchanged
-        CASE 
-            WHEN LOWER(ts_unitsymbol) = '°c' THEN (value * 9.0 / 5.0) + 32
-            WHEN ts_unitsymbol = 'kg' THEN value * 2.20462    -- Convert kg to lb
-            ELSE value
-        END AS value,
-
-        -- Normalize units
-        CASE 
-            WHEN LOWER(ts_unitsymbol) = '°c' THEN 'degf'      -- Normalize °C to degF
-            WHEN ts_unitsymbol = 'kg' THEN 'lb'              -- Normalize kg to lb
-            WHEN ts_unitsymbol = 'ft³/s' THEN 'cfs'          -- Rename ft³/s to cfs
-            ELSE ts_unitsymbol
-        END AS unit,
-
-        -- Normalize column names
-        station_no AS station_id,                             -- Rename station_no to station_id
-        Timestamp AS datetime,                                -- Rename Timestamp to datetime
-        "Quality Code" AS quality_code,                      -- Rename Quality Code to quality_code
-        "Quality Code Name" AS quality_code_name,            -- Rename Quality Code Name to quality_code_name
-        parametertype_id,                                    -- Keeps parametertype_id as is
-        constituent                                          -- Keeps constituent as is
-    FROM staging.wiski;""")
 
 
 def create_filtered_wiski_view(con: duckdb.DuckDBPyConnection, data_codes: list):
-    """
-    Create a view in the database that filters WISKI data based on specified data codes.
-    """
+    """Create a view filtering WISKI data based on specified data codes."""
+    placeholders = ', '.join(['?'] * len(data_codes))
     query = f"""
     CREATE OR REPLACE VIEW analytics.wiski_filtered AS
     SELECT *
     FROM analytics.wiski_normalized
     WHERE quality_code IN ({placeholders});
     """
-
-    placeholders = ', '.join(['?'] * len(data_codes))
-    query = query.format(placeholders=placeholders)
     con.execute(query, data_codes)
 
 
 def create_aggregated_wiski_view(con: duckdb.DuckDBPyConnection):
-    """
-    Create a view in the database that aggregates WISKI data by hour, station, and constituent.
-    """
+    """Create a view aggregating WISKI data by hour, station, and constituent."""
     con.execute("""
     CREATE OR REPLACE Table analytics.wiski_aggregated AS
     SELECT 
@@ -295,199 +131,11 @@ def create_aggregated_wiski_view(con: duckdb.DuckDBPyConnection):
         unit;
     """)
 
-def create_staging_qc_count_view(con: duckdb.DuckDBPyConnection):
-    """
-    Create a view in staging schema that counts quality codes for each station and constituent.
-    """
-    con.execute("""
-        CREATE OR REPLACE VIEW reports.wiski_qc_count AS (
-        SELECT 
-            w.station_no,
-            w.parametertype_name,
-            w."Quality Code",
-            COUNT(w."Quality Code") AS count,
-            wqc."Text",
-            wqc.Description,
-            
-        FROM staging.wiski w 
-        LEFT JOIN mappings.wiski_quality_codes wqc
-            ON w."Quality Code" = wqc.quality_code
-        WHERE wqc.Active = 1
-        GROUP BY
-            w."Quality Code",wqc."Text",wqc.Description,w.parametertype_name, w.station_no
-                ); 
-        """)
-    # ORDER BY
-    #         w.station_no,w.parametertype_name, w."Quality Code"
-    #         )
-    # """)
-
-def create_combined_observations_view(con: duckdb.DuckDBPyConnection):
-    """
-    Create a view in analytics schema that combines observations from equis and wiski processed tables.
-    """
-    con.execute("""
-    CREATE OR REPLACE VIEW analytics.observations AS
-    SELECT datetime,value,station_id,station_origin,constituent,unit
-    FROM analytics.equis
-    UNION ALL
-    SELECT datetime,value,station_id,station_origin,constituent,unit
-    FROM analytics.wiski;
-    """)
- 
-
-def create_outlet_observations_view(con: duckdb.DuckDBPyConnection):
-    """
-    Create a view in analytics schema that links observations to model reaches via outlets.
-    """
-    con.execute("""
-    CREATE OR REPLACE VIEW analytics.outlet_observations AS 
-    SELECT
-        o.datetime,
-        os.outlet_id,
-        o.constituent,
-        AVG(o.value) AS value,
-        COUNT(o.value) AS count
-    FROM
-        analytics.observations AS o
-    INNER JOIN
-        outlets.outlet_stations AS os ON o.station_id = os.station_id AND o.station_origin = os.station_origin
-    WHERE os.outlet_id IS NOT NULL
-    GROUP BY
-        os.outlet_id,
-        o.constituent,
-        o.datetime; -- Group by the truncated date
-    """)
-    # ORDER BY
-    #     os.outlet_id,
-    #     o.constituent,
-    #     datetime);
-
-
-
-def create_outlet_observations_with_flow_view(con: duckdb.DuckDBPyConnection):
-    
-    con.execute("""
-                CREATE OR REPLACE VIEW analytics.outlet_observations_with_flow AS
-                WITH 
-                -- Extract baseflow data (constituent = 'QB')
-                baseflow_data AS (
-                    SELECT
-                        outlet_id,
-                        datetime,
-                        "value" AS baseflow_value
-                    FROM
-                        analytics.outlet_observations
-                    WHERE
-                        constituent = 'QB'
-                ),
-
-                -- Extract flow data (constituent = 'Q')
-                flow_data AS (
-                    SELECT
-                        outlet_id,
-                        datetime,
-                        "value" AS flow_value
-                    FROM
-                        analytics.outlet_observations
-                    WHERE
-                        constituent = 'Q'
-                ),
-
-                -- Extract all other constituent data (not 'Q' or 'QB')
-                constituent_data AS (
-                    SELECT
-                        outlet_id,
-                        datetime,
-                        constituent,
-                        "value",
-                        count
-                    FROM
-                        analytics.outlet_observations
-                    WHERE
-                        constituent NOT IN ('Q', 'QB')
-                )
-
-                -- Final join: Only include rows that have baseflow, flow, and constituent data
-                SELECT
-                    c.outlet_id,
-                    c.constituent,
-                    c.datetime,
-                    c."value",
-                    c.count,
-                    f.flow_value,
-                    b.baseflow_value
-                FROM
-                    constituent_data AS c
-                LEFT JOIN
-                    flow_data AS f
-                    ON c.outlet_id = f.outlet_id 
-                    AND c.datetime = f.datetime
-                LEFT JOIN
-                    baseflow_data AS b
-                    ON c.outlet_id = b.outlet_id 
-                    AND c.datetime = b.datetime;""")
-    # ORDER BY
-    #     constituent_data.outlet_id,
-    #     constituent_data.datetime;
-    # 
-
-def create_constituent_summary_report(con: duckdb.DuckDBPyConnection):
-    """
-    Create a constituent summary report in the reports schema that groups observations by constituent and station.
-    """
-    con.execute('''
-            CREATE OR REPLACE VIEW reports.constituent_summary AS
-            SELECT
-            station_id,
-            station_origin,
-            constituent,
-            COUNT(*) AS sample_count,
-            AVG(value) AS average_value,
-            MIN(value) AS min_value,
-            MAX(value) AS max_value,
-            year(MIN(datetime)) AS start_date,
-            year(MAX(datetime)) AS end_date
-            FROM
-            analytics.observations
-            GROUP BY
-            constituent,station_id,station_origin;
-            ''')
-                
-            # ORDER BY
-            # constituent,sample_count;''')
- 
-def create_outlet_summary_report(con: duckdb.DuckDBPyConnection):
-    con.execute("""
-        CREATE OR REPLACE VIEW reports.outlet_constituent_summary AS
-    SELECT
-        outlet_id,
-        constituent,
-        count_star() AS sample_count,
-        avg("value") AS average_value,
-        min("value") AS min_value,
-        max("value") AS max_value,
-        "year"(min(datetime)) AS start_date,
-        "year"(max(datetime)) AS end_date
-    FROM
-        analytics.outlet_observations
-    GROUP BY
-        constituent,
-        outlet_id
-    """)
-
-    
 
 def update_views(con: duckdb.DuckDBPyConnection):
-    """
-    Update all views in the database.
-    """
-    create_staging_qc_count_view(con)
-    create_combined_observations_view(con)
-    create_constituent_summary_report(con)
-    create_outlet_observations_view(con)
-    create_outlet_observations_with_flow_view(con)
-    create_outlet_summary_report(con)
+    """Update all views in the database by loading from SQL files."""
+    con.execute(sql_loader.get_views_analytics_sql())
+    con.execute(sql_loader.get_views_reports_sql())
     
 def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """
