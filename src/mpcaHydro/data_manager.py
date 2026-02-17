@@ -20,6 +20,8 @@ from mpcaHydro.data_manager_functions import (
     process_all_data,
     download_wiski_data,
     download_equis_data,
+    drop_wiski_station_data,
+    drop_equis_station_data,
     get_outlets,
     get_station_ids,
     get_observation_data,
@@ -33,12 +35,14 @@ from mpcaHydro.data_manager_functions import (
     get_wiski_template,
     AGG_DEFAULTS,
     UNIT_DEFAULTS,
+    DataManagerWrapper,
 )
 
 # Re-export for backwards compatibility
 __all__ = [
-    # Class
+    # Classes
     'dataManager',
+    'DataManagerWrapper',
     # Existing module-level functions
     'validate_constituent',
     'validate_unit',
@@ -53,6 +57,8 @@ __all__ = [
     'process_all_data',
     'download_wiski_data',
     'download_equis_data',
+    'drop_wiski_station_data',
+    'drop_equis_station_data',
     'get_outlets',
     'get_station_ids',
     'get_observation_data',

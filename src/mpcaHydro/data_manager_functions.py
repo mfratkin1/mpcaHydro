@@ -81,6 +81,26 @@ def process_all_data(
     process_equis_data(con)
 
 
+def drop_wiski_station_data(
+    con: duckdb.DuckDBPyConnection,
+    station_ids: List[str]
+) -> None:
+    """Drop WISKI data for specified station IDs from staging and analytics."""
+    for station_id in station_ids:
+        con.execute("DELETE FROM staging.wiski WHERE station_no = ?", [station_id])
+        con.execute("DELETE FROM analytics.wiski WHERE station_id = ?", [station_id])
+
+
+def drop_equis_station_data(
+    con: duckdb.DuckDBPyConnection,
+    station_ids: List[str]
+) -> None:
+    """Drop EQuIS data for specified station IDs from staging and analytics."""
+    for station_id in station_ids:
+        con.execute("DELETE FROM staging.equis WHERE SYS_LOC_CODE = ?", [station_id])
+        con.execute("DELETE FROM analytics.equis WHERE station_id = ?", [station_id])
+
+
 def download_wiski_data(
     con: duckdb.DuckDBPyConnection,
     station_ids: List[str],
@@ -88,10 +108,15 @@ def download_wiski_data(
     end_year: int = 2030,
     filter_qc_codes: bool = True,
     data_codes: Optional[List[int]] = None,
-    baseflow_method: str = 'Boughton'
+    baseflow_method: str = 'Boughton',
+    replace: bool = False
 ) -> None:
     """Download WISKI data for given station IDs and load into the warehouse."""
     from mpcaHydro import wiski, warehouse
+    
+    if replace:
+        drop_wiski_station_data(con, station_ids)
+    
     df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
     if not df.empty:
         warehouse.load_df_to_table(con, df, 'staging.wiski')
@@ -109,10 +134,15 @@ def download_equis_data(
     con: duckdb.DuckDBPyConnection,
     station_ids: List[str],
     oracle_username: str,
-    oracle_password: str
+    oracle_password: str,
+    replace: bool = False
 ) -> None:
     """Download EQuIS data for given station IDs and load into the warehouse."""
     from mpcaHydro import equis, warehouse
+    
+    if replace:
+        drop_equis_station_data(con, station_ids)
+    
     equis.connect(user=oracle_username, password=oracle_password)
     print('Connected to Oracle database.')
     df = equis.download(station_ids)
@@ -298,3 +328,149 @@ def get_wiski_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """Get an empty DataFrame with WISKI staging table schema."""
     query = '''SELECT * FROM staging.wiski LIMIT 0'''
     return con.execute(query).fetch_df()
+
+
+class DataManagerWrapper:
+    """Minimal wrapper class that calls procedural functions with context-managed connections."""
+    
+    def __init__(self, db_path: Union[str, Path]):
+        """Initialize wrapper with database path."""
+        self.db_path = Path(db_path)
+    
+    def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+        """Create a database connection."""
+        from mpcaHydro import warehouse
+        return warehouse.connect(self.db_path.as_posix(), read_only=read_only)
+    
+    def update_views(self) -> None:
+        """Update all database views."""
+        with self._connect(read_only=False) as con:
+            update_views(con)
+    
+    def process_wiski_data(
+        self,
+        filter_qc_codes: bool = True,
+        data_codes: Optional[List[int]] = None,
+        baseflow_method: str = 'Boughton'
+    ) -> None:
+        """Process WISKI data from staging to analytics."""
+        with self._connect(read_only=False) as con:
+            process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
+    
+    def process_equis_data(self) -> None:
+        """Process EQuIS data from staging to analytics."""
+        with self._connect(read_only=False) as con:
+            process_equis_data(con)
+    
+    def process_all_data(
+        self,
+        filter_qc_codes: bool = True,
+        data_codes: Optional[List[int]] = None,
+        baseflow_method: str = 'Boughton'
+    ) -> None:
+        """Process all data (WISKI and EQuIS) from staging to analytics."""
+        with self._connect(read_only=False) as con:
+            process_all_data(con, filter_qc_codes, data_codes, baseflow_method)
+    
+    def download_wiski_data(
+        self,
+        station_ids: List[str],
+        start_year: int = 1996,
+        end_year: int = 2030,
+        filter_qc_codes: bool = True,
+        data_codes: Optional[List[int]] = None,
+        baseflow_method: str = 'Boughton',
+        replace: bool = False
+    ) -> None:
+        """Download WISKI data for given station IDs and load into the warehouse."""
+        with self._connect(read_only=False) as con:
+            download_wiski_data(
+                con, station_ids, start_year, end_year,
+                filter_qc_codes, data_codes, baseflow_method, replace
+            )
+    
+    def download_equis_data(
+        self,
+        station_ids: List[str],
+        oracle_username: str,
+        oracle_password: str,
+        replace: bool = False
+    ) -> None:
+        """Download EQuIS data for given station IDs and load into the warehouse."""
+        with self._connect(read_only=False) as con:
+            download_equis_data(con, station_ids, oracle_username, oracle_password, replace)
+    
+    def get_outlets(self, model_name: str) -> pd.DataFrame:
+        """Get outlet data for a given model."""
+        with self._connect(read_only=True) as con:
+            return get_outlets(con, model_name)
+    
+    def get_station_ids(self, station_origin: Optional[str] = None) -> List[str]:
+        """Get list of station IDs, optionally filtered by origin."""
+        with self._connect(read_only=True) as con:
+            return get_station_ids(con, station_origin)
+    
+    def get_observation_data(
+        self,
+        station_ids: List[str],
+        constituent: str,
+        agg_period: Optional[str] = None
+    ) -> pd.DataFrame:
+        """Get observation data for given stations and constituent."""
+        with self._connect(read_only=True) as con:
+            return get_observation_data(con, station_ids, constituent, agg_period)
+    
+    def get_outlet_data(
+        self,
+        outlet_id: int,
+        constituent: str,
+        agg_period: str = 'D'
+    ) -> pd.DataFrame:
+        """Get outlet observation data with flow for a given outlet and constituent."""
+        with self._connect(read_only=True) as con:
+            return get_outlet_data(con, outlet_id, constituent, agg_period)
+    
+    def get_station_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
+        """Get all observation data for a specific station."""
+        with self._connect(read_only=True) as con:
+            return get_station_data(con, station_id, station_origin)
+    
+    def get_raw_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
+        """Get raw staging data for a specific station."""
+        with self._connect(read_only=True) as con:
+            return get_raw_data(con, station_id, station_origin)
+    
+    def get_constituent_summary(self) -> pd.DataFrame:
+        """Get summary of constituents across all stations."""
+        with self._connect(read_only=True) as con:
+            return get_constituent_summary(con)
+    
+    def export_station_to_csv(
+        self,
+        station_id: str,
+        station_origin: str,
+        output_path: Union[str, Path]
+    ) -> None:
+        """Export station data to a CSV file."""
+        with self._connect(read_only=True) as con:
+            export_station_to_csv(con, station_id, station_origin, output_path)
+    
+    def export_raw_to_csv(
+        self,
+        station_id: str,
+        station_origin: str,
+        output_path: Union[str, Path]
+    ) -> None:
+        """Export raw staging data to a CSV file."""
+        with self._connect(read_only=True) as con:
+            export_raw_to_csv(con, station_id, station_origin, output_path)
+    
+    def get_equis_template(self) -> pd.DataFrame:
+        """Get an empty DataFrame with EQuIS staging table schema."""
+        with self._connect(read_only=True) as con:
+            return get_equis_template(con)
+    
+    def get_wiski_template(self) -> pd.DataFrame:
+        """Get an empty DataFrame with WISKI staging table schema."""
+        with self._connect(read_only=True) as con:
+            return get_wiski_template(con)
