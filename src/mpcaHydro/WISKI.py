@@ -128,16 +128,23 @@ def info(station_ids: list,constituent = None):
 
 
 
-def download(station_ids: list, start_year: int = 1996, end_year: int = 2030,wplmn: bool = False):
+def download(station_ids: list,constituent = None, start_year: int = 1996, end_year: int = 2030,wplmn: bool = False):
     '''
     Fetch data for given station IDs from WISKI database using the KISTERS API.
     '''
+    if constituent is None:
+        constituents = VALID_CONSTITUENTS
+    else:
+        if constituent not in VALID_CONSTITUENTS:
+            raise ValueError(f'Invalid constituent: {constituent}. Valid constituents are: {VALID_CONSTITUENTS}')
+        constituents = [constituent]
+
     dfs = [pd.DataFrame()]
     for station_id in station_ids:
         if not isinstance(station_id,str):
             raise ValueError(f'Station ID {station_id} is not a string')
         print('Downloading Timeseries Data')
-        df = pd.concat([_download(constituent,station_id,start_year,end_year,wplmn) for constituent in VALID_CONSTITUENTS])
+        df = pd.concat([_download(constituent,station_id,start_year,end_year,wplmn) for constituent in constituents])
 
         if not df.empty:
             dfs.append(df)
@@ -151,6 +158,31 @@ def download(station_ids: list, start_year: int = 1996, end_year: int = 2030,wpl
     print('Done!')
     
     return df
+
+def _get_ts_ids(station_nos: list, constituent: str):
+    '''
+    Fetch time series IDs for given station numbers and constituent from WISKI database using the KISTERS API.
+    '''
+    if constituent not in VALID_CONSTITUENTS:
+        raise ValueError(f'Invalid constituent: {constituent}. Valid constituents are: {VALID_CONSTITUENTS}')
+    
+    if station_nos[0] == 'E':
+        ts_names = TS_NAME_SELECTOR[constituent]['External']
+    else:
+        ts_names =TS_NAME_SELECTOR[constituent]['Internal']
+    
+    constituent_nos = CONSTITUENT_NAME_NO[constituent]
+    
+    ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
+                            stationparameter_no = constituent_nos,
+                            ts_name = ts_names['unit'])
+    
+    if ts_ids.empty:
+        ts_ids = pywisk.get_ts_ids(station_nos = station_nos,
+                                stationparameter_no = constituent_nos,
+                                ts_name = ts_names['daily'])
+    
+    return ts_ids
 
 def _download(constituent,station_nos,start_year = 1996,end_year = 2030,wplmn = False):
 
@@ -179,6 +211,7 @@ def _download(constituent,station_nos,start_year = 1996,end_year = 2030,wplmn = 
         df = convert_to_df(ts_ids['ts_id'],start_year,end_year)
 
         if df.empty:
+            print(f'No data found for station {station_nos} and constituent {constituent}')
             return pd.DataFrame()    
     else:
         df = pd.DataFrame()
