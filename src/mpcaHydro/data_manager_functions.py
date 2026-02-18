@@ -27,16 +27,11 @@ UNIT_DEFAULTS = {
 }
 
 
-def get_db_path(folderpath: Union[str, Path]) -> Path:
-    """Get the database path for a given folder."""
-    return Path(folderpath) / 'observations.duckdb'
 
-
-def init_warehouse(folderpath: Union[str, Path], reset: bool = False) -> Path:
+def init_warehouse(db_path: Union[str, Path], reset: bool = False) -> Path:
     """Initialize the data warehouse database and return the db_path."""
     from mpcaHydro import warehouse
-    folderpath = Path(folderpath)
-    db_path = get_db_path(folderpath)
+    db_path = Path(db_path)
     warehouse.init_db(db_path.as_posix(), reset)
     return db_path
 
@@ -146,13 +141,14 @@ def download_equis_data(
     equis.connect(user=oracle_username, password=oracle_password)
     print('Connected to Oracle database.')
     df = equis.download(station_ids)
+    equis.close_connection()
     if not df.empty:
         warehouse.load_df_to_table(con, df, 'staging.equis')
         warehouse.load_df_to_table(con, equis.transform(df.copy()), 'analytics.equis')
         warehouse.update_views(con)
     else:
         print('No data necessary for HSPF calibration from equis for:', station_ids)
-
+    
 
 def get_outlets(con: duckdb.DuckDBPyConnection, model_name: str) -> pd.DataFrame:
     """Get outlet data for a given model."""
@@ -330,13 +326,72 @@ def get_wiski_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     return con.execute(query).fetch_df()
 
 
+def outlet_summary(con: duckdb.DuckDBPyConnection):
+    query = '''
+    SELECT *,
+    FROM 
+        reports.outlet_constituent_summary
+    ORDER BY
+        outlet_id,
+        constituent
+    '''
+    df = con.execute(query).fetch_df()
+    return df
+        
+
+def wiski_qc_counts(con: duckdb.DuckDBPyConnection):
+    query = '''
+    SELECT *,
+    FROM 
+        reports.wiski_qc_count
+    ORDER BY
+        station_no,
+        parametertype_name
+    '''
+    df = con.execute(query).fetch_df()
+    return df
+
+def station_summary(con: duckdb.DuckDBPyConnection,constituent: str = None):
+    
+    query = '''
+    SELECT *,
+    FROM 
+        reports.constituent_summary
+    ORDER BY
+        station_id,
+        station_origin,
+        constituent
+    '''
+    df = con.execute(query).fetch_df()
+    if constituent is not None:
+        df = df[df['constituent'] == constituent]
+    return df
+
+def station_reach_pairs(con: duckdb.DuckDBPyConnection):
+    query = '''
+    SELECT *,
+    FROM 
+        reports.station_reach_pairs
+    ORDER BY
+        outlet_id,
+        station_id
+    '''
+    df = con.execute(query).fetch_df()
+    return df
+
 class DataManagerWrapper:
     """Minimal wrapper class that calls procedural functions with context-managed connections."""
     
-    def __init__(self, db_path: Union[str, Path]):
+    def __init__(self, db_path: Union[str, Path], reset: bool = False):
         """Initialize wrapper with database path."""
         self.db_path = Path(db_path)
+        if reset:
+            self._init_warehouse(reset=True)
     
+    def _init_warehouse(self, reset: bool = False) -> None:
+        """Initialize the data warehouse database."""
+        init_warehouse(self.db_path, reset)
+
     def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         """Create a database connection."""
         from mpcaHydro import warehouse
@@ -346,6 +401,23 @@ class DataManagerWrapper:
         """Update all database views."""
         with self._connect(read_only=False) as con:
             update_views(con)
+    
+    def wiski_qc_counts(self):
+        with self._connect(read_only=True) as con:
+            return wiski_qc_counts(con)
+        
+    def station_summary(self,constituent: str = None):
+        with self._connect(read_only=True) as con:
+            return station_summary(con,constituent)
+        
+    def station_reach_pairs(self):
+        with self._connect(read_only=True) as con:
+            return station_reach_pairs(con)
+        
+    def outlet_summary(self):
+        with self._connect(read_only=True) as con:
+            return outlet_summary(con)
+    
     
     def process_wiski_data(
         self,
