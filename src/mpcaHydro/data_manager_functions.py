@@ -27,6 +27,10 @@ UNIT_DEFAULTS = {
 }
 
 
+def get_db_path(folderpath: Union[str, Path]) -> Path:
+    """Get the database path for a given folder."""
+    return Path(folderpath) / 'observations.duckdb'
+
 
 def init_warehouse(db_path: Union[str, Path], reset: bool = False) -> Path:
     """Initialize the data warehouse database and return the db_path."""
@@ -138,10 +142,10 @@ def download_equis_data(
     if replace:
         drop_equis_station_data(con, station_ids)
     
-    equis.connect(user=oracle_username, password=oracle_password)
+    oracle_conn = equis.connect(user=oracle_username, password=oracle_password)
     print('Connected to Oracle database.')
-    df = equis.download(station_ids)
-    equis.close_connection()
+    df = equis.download(station_ids, connection=oracle_conn)
+    equis.close_connection(oracle_conn)
     if not df.empty:
         warehouse.load_df_to_table(con, df, 'staging.equis')
         warehouse.load_df_to_table(con, equis.transform(df.copy()), 'analytics.equis')

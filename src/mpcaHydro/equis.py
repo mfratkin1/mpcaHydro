@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone, timedelta
 import pandas as pd
-from typing import Union
+from typing import Union, Optional
 import oracledb
 import duckdb
 
@@ -33,10 +33,18 @@ def connect(user: str, password: str, host: str = "DELTAT", port: int = 1521, si
                                  sid=sid) 
     return CONNECTION
 
-def close_connection():
-    '''Close the global Oracle database connection if it exists.'''
+def close_connection(connection: Optional[oracledb.Connection] = None):
+    '''Close the Oracle database connection.
+    
+    Args:
+        connection: Optional connection to close. If not provided, closes global CONNECTION.
+    '''
     global CONNECTION
-    if CONNECTION:
+    if connection is not None:
+        connection.close()
+        if connection is CONNECTION:
+            CONNECTION = None
+    elif CONNECTION is not None:
         CONNECTION.close()
         CONNECTION = None
 
@@ -81,10 +89,19 @@ def to_dataframe(odb_cursor):
 
 #%% Query for station locations with HSPF related constituents
  
-def download(station_ids):
+def download(station_ids, connection: Optional[oracledb.Connection] = None):
     '''Download data for given station IDs from Oracle database.
     This grabs data from the Data access Layer (DAL) equis result view for
-    river/stream locations and HSPF related constituents only.'''
+    river/stream locations and HSPF related constituents only.
+    
+    Args:
+        station_ids: List of station IDs to download
+        connection: Optional Oracle connection. If not provided, uses global CONNECTION.
+    '''
+    conn = connection if connection is not None else CONNECTION
+    if conn is None:
+        raise ValueError("No connection provided and global CONNECTION is not set. Call connect() first or pass a connection.")
+    
     placeholders, binds = make_placeholders(station_ids)
     query = f"""
 SELECT
@@ -122,7 +139,7 @@ SELECT
         AND mpca_dal.eq_sample.sample_method IN ('G-EVT', 'G', 'FIELDMSROBS', 'LKSURF1M', 'LKSURF2M', 'LKSURFOTH')
         AND mpca_dal.mv_eq_result.sys_loc_code IN ({placeholders})
     """
-    with CONNECTION.cursor() as cursor:
+    with conn.cursor() as cursor:
         cursor.execute(query,binds)
         return to_dataframe(cursor)
     
@@ -441,8 +458,16 @@ def transform(df):
 #         GROUP BY station_id, DATE_TRUNC('hour', datetime), constituent, unit
 #     """ )
 
-def fetch_station_locations():
-    '''Fetch station location data for stations with HSPF related constituents.'''
+def fetch_station_locations(connection: Optional[oracledb.Connection] = None):
+    '''Fetch station location data for stations with HSPF related constituents.
+    
+    Args:
+        connection: Optional Oracle connection. If not provided, uses global CONNECTION.
+    '''
+    conn = connection if connection is not None else CONNECTION
+    if conn is None:
+        raise ValueError("No connection provided and global CONNECTION is not set. Call connect() first or pass a connection.")
+    
     query ="""SELECT DISTINCT
     m.SYS_LOC_CODE,
     stn.LONGITUDE,
@@ -467,22 +492,7 @@ def fetch_station_locations():
                         'TEMP-W',
                         '7664-41-7')
         """
-    with CONNECTION.cursor() as cursor:
+    with conn.cursor() as cursor:
         cursor.execute(query)
         df = to_dataframe(cursor)
-        
-        # dups = set(df.loc[df['SYS_LOC_CODE'].isin(df.loc[df['SYS_LOC_CODE'].duplicated()]['SYS_LOC_CODE']),'SYS_LOC_CODE'].to_list())
-        # for dup in dups:
-        #     #percent difference between lat/long values
-        #     sub = df.loc[df['SYS_LOC_CODE'] == dup]
-        #     lat_diff = abs(sub['LATITUDE'].max() - sub['LATITUDE'].min()) / ((sub['LATITUDE'].max() + sub['LATITUDE'].min()) / 2) * 100
-        #     long_diff = abs(sub['LONGITUDE'].max() - sub['LONGITUDE'].min()) / ((sub['LONGITUDE'].max() + sub['LONGITUDE'].min()) / 2) * 100
-        #     print(f'Duplicate station {dup} has {lat_diff:.6f}% latitude difference')
-        #     print(f'Duplicate station {dup} has {long_diff:.6f}% longitude difference')
-
-        
-        # geometry = gpd.points_from_xy(df['LONGITUDE'], df['LATITUDE'])
-        # gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-        # filename = 'EQ_STATION_' + str(date.today()) + '.gpkg'
-        # gdf.to_file(save_path.joinpath(filename), driver = 'GPKG')
-        # gdf.rename(columns={'SYS_LOC_CODE':'station_id'}, inplace=True)
+        return df

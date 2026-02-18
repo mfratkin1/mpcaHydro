@@ -133,7 +133,7 @@ class dataManager():
     
     def connect_to_oracle(self):
         assert (self.credentials_exist(), 'Oracle credentials not found. Set ORACLE_USER and ORACLE_PASSWORD environment variables or use swd as station_origin')
-        equis.connect(user = self.oracle_username, password = self.oracle_password)
+        return equis.connect(user = self.oracle_username, password = self.oracle_password)
     
     def credentials_exist(self):
         if (self.oracle_username is not None) & (self.oracle_password is not None):
@@ -178,10 +178,11 @@ class dataManager():
 
     def _download_equis_data(self,station_ids):
         if self.credentials_exist():
-            self.connect_to_oracle()
+            oracle_conn = self.connect_to_oracle()
             print('Connected to Oracle database.')
             with warehouse.connect(self.db_path,read_only = False) as con:
-                df = equis.download(station_ids)
+                df = equis.download(station_ids, connection=oracle_conn)
+                equis.close_connection(oracle_conn)
                 if not df.empty:
                     warehouse.load_df_to_table(con,df, 'staging.equis')
                     warehouse.load_df_to_table(con,equis.transform(df.copy()), 'analytics.equis')
