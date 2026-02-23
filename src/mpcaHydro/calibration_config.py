@@ -60,9 +60,6 @@ from mpcaHydro.calibration_functions import (
     locations_to_dataframe,
     config_to_dict,
     config_from_dict,
-    create_location,
-    create_config_from_records,
-    create_config_from_dataframe,
 )
 
 # Re-export for backwards compatibility
@@ -104,9 +101,6 @@ __all__ = [
     'locations_to_dataframe',
     'config_to_dict',
     'config_from_dict',
-    'create_location',
-    'create_config_from_records',
-    'create_config_from_dataframe',
 ]
 
 
