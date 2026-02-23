@@ -285,5 +285,146 @@ class TestDatabaseIO:
             assert len(loaded.locations) == 1
 
 
+class TestCreateLocation:
+    """Tests for create_location function."""
+
+    def test_create_location_basic(self):
+        """Test creating a location with stations."""
+        from mpcaHydro.calibration_functions import create_location
+        location = create_location(
+            location_id=1,
+            location_name='Test Location',
+            repository_name='TestRepo',
+            reach_ids=[100, 101],
+            station_ids=['A', 'B']
+        )
+        assert location.location_id == 1
+        assert location.location_name == 'Test Location'
+        assert location.reach_ids == [100, 101]
+        assert len(location.stations) == 2
+        assert location.stations[0].station_id == 'A'
+        assert location.stations[1].station_id == 'B'
+        assert all(s.station_origin == 'wiski' for s in location.stations)
+
+    def test_create_location_with_origin(self):
+        """Test creating a location with custom station origin."""
+        from mpcaHydro.calibration_functions import create_location
+        location = create_location(
+            location_id=1,
+            location_name='Test',
+            repository_name='TestRepo',
+            reach_ids=[100],
+            station_ids=['A'],
+            station_origin='equis'
+        )
+        assert location.stations[0].station_origin == 'equis'
+
+
+class TestCreateConfigFromRecords:
+    """Tests for create_config_from_records function."""
+
+    def test_basic_records(self):
+        """Test creating config from basic records."""
+        from mpcaHydro.calibration_functions import create_config_from_records
+        records = [
+            {'location_name': 'loc1', 'reach_id': 1, 'station_id': 'A'},
+            {'location_name': 'loc1', 'reach_id': 2, 'station_id': 'A'},
+            {'location_name': 'loc2', 'reach_id': 50, 'station_id': 'B'},
+            {'location_name': 'loc3', 'reach_id': 30, 'station_id': 'C'},
+            {'location_name': 'loc3', 'reach_id': 30, 'station_id': 'D'},
+        ]
+        config = create_config_from_records(records, 'TestRepo')
+        
+        assert config.repository_name == 'TestRepo'
+        assert len(config.locations) == 3
+        
+        # Check loc1: 2 reaches, 1 station
+        loc1 = config.get_location_by_name('loc1')
+        assert loc1 is not None
+        assert set(loc1.reach_ids) == {1, 2}
+        assert len(loc1.stations) == 1
+        assert loc1.stations[0].station_id == 'A'
+        
+        # Check loc2: 1 reach, 1 station
+        loc2 = config.get_location_by_name('loc2')
+        assert loc2 is not None
+        assert loc2.reach_ids == [50]
+        assert len(loc2.stations) == 1
+        
+        # Check loc3: 1 reach, 2 stations
+        loc3 = config.get_location_by_name('loc3')
+        assert loc3 is not None
+        assert loc3.reach_ids == [30]
+        assert len(loc3.stations) == 2
+        station_ids = [s.station_id for s in loc3.stations]
+        assert 'C' in station_ids
+        assert 'D' in station_ids
+
+    def test_with_station_origin(self):
+        """Test records with station origin column."""
+        from mpcaHydro.calibration_functions import create_config_from_records
+        records = [
+            {'location_name': 'loc1', 'reach_id': 1, 'station_id': 'A', 'origin': 'wiski'},
+            {'location_name': 'loc1', 'reach_id': 1, 'station_id': 'B', 'origin': 'equis'},
+        ]
+        config = create_config_from_records(
+            records, 
+            'TestRepo',
+            station_origin_col='origin'
+        )
+        
+        loc = config.locations[0]
+        origins = {s.station_id: s.station_origin for s in loc.stations}
+        assert origins['A'] == 'wiski'
+        assert origins['B'] == 'equis'
+
+    def test_custom_column_names(self):
+        """Test records with custom column names."""
+        from mpcaHydro.calibration_functions import create_config_from_records
+        records = [
+            {'loc': 'L1', 'rch': 100, 'stn': 'X'},
+        ]
+        config = create_config_from_records(
+            records,
+            'TestRepo',
+            location_col='loc',
+            reach_col='rch',
+            station_col='stn'
+        )
+        assert len(config.locations) == 1
+        assert config.locations[0].location_name == 'L1'
+        assert config.locations[0].reach_ids == [100]
+        assert config.locations[0].stations[0].station_id == 'X'
+
+
+class TestCreateConfigFromDataFrame:
+    """Tests for create_config_from_dataframe function."""
+
+    def test_from_dataframe(self):
+        """Test creating config from DataFrame."""
+        import pandas as pd
+        from mpcaHydro.calibration_functions import create_config_from_dataframe
+        
+        df = pd.DataFrame([
+            {'location_name': 'loc1', 'reach_id': 1, 'station_id': 'A'},
+            {'location_name': 'loc1', 'reach_id': 2, 'station_id': 'A'},
+            {'location_name': 'loc2', 'reach_id': 50, 'station_id': 'B'},
+            {'location_name': 'loc3', 'reach_id': 30, 'station_id': 'C'},
+            {'location_name': 'loc3', 'reach_id': 30, 'station_id': 'D'},
+        ])
+        
+        config = create_config_from_dataframe(df, 'TestRepo')
+        
+        assert config.repository_name == 'TestRepo'
+        assert len(config.locations) == 3
+        
+        loc1 = config.get_location_by_name('loc1')
+        assert set(loc1.reach_ids) == {1, 2}
+        assert len(loc1.stations) == 1
+        
+        loc3 = config.get_location_by_name('loc3')
+        assert len(loc3.stations) == 2
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
