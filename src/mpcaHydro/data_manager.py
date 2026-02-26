@@ -11,7 +11,7 @@ from mpcaHydro.reports import reportManager
 import duckdb
 
 # Import procedural functions
-from mpcaHydro.data_manager_functions import (
+from mpcaHydro.warehouse_functions import (
     get_db_path,
     init_warehouse,
     update_views,
@@ -20,8 +20,6 @@ from mpcaHydro.data_manager_functions import (
     process_all_data,
     download_wiski_data,
     download_equis_data,
-    drop_wiski_station_data,
-    drop_equis_station_data,
     get_outlets,
     get_station_ids,
     get_observation_data,
