@@ -1,3 +1,5 @@
+from typing import List
+
 import duckdb
 import pandas as pd
 from pathlib import Path
@@ -148,14 +150,15 @@ def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     return duckdb.connect(database=db_path.as_posix(), read_only=read_only)
 
 
-def drop_station_id(con: duckdb.DuckDBPyConnection, station_id: str,station_origin: str):
+def drop_station_data(con: duckdb.DuckDBPyConnection, station_ids: List[str], station_origin: str):
     """
-    Drop all data for a specific station from staging and analytics schemas.
+    Drop all data for a specific stations from staging and analytics schemas.
     """
-    con.execute(f"DELETE FROM staging.equis WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM staging.wiski WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM analytics.equis WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
-    con.execute(f"DELETE FROM analytics.wiski WHERE station_id = '{station_id}' AND station_origin = '{station_origin}'")
+    placeholders = ', '.join(['?'] * len(station_ids))
+    con.execute(f"DELETE FROM staging.equis WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
+    con.execute(f"DELETE FROM staging.wiski WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
+    con.execute(f"DELETE FROM analytics.equis WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
+    con.execute(f"DELETE FROM analytics.wiski WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
     update_views(con)
 
 def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_name: str) -> list:
@@ -173,16 +176,14 @@ def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_na
     return column_names
 
 
-def add_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_schema: str, table_name: str):
+def add_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_schema: str, table_name: str):
     """
     Append a pandas DataFrame into a DuckDB table. This will create the table
     if it does not exist.
     """
-
-
     # get existing columns
     existing_columns = get_column_names(con, table_schema, table_name)
-    df = df[[existing_columns]]
+    df = df[existing_columns]
 
 
     # register pandas DF and create table if not exists
@@ -193,15 +194,6 @@ def add_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_schema:
         SELECT * FROM tmp_df
     """)
     con.unregister("tmp_df")
-
-def add_station_data(con: duckdb.DuckDBPyConnection, station_id: str, station_origin: str, table_schema: str, table_name: str, df: pd.DataFrame, replace: bool = False):
-    """
-    Add station data to the staging and analytics schemas.
-    """
-    if replace:
-        drop_station_id(con, station_id, station_origin)
-    add_to_table(con, df, table_schema, table_name)
-
 
 def load_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str):
     """
