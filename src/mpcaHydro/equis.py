@@ -88,7 +88,19 @@ def to_dataframe(odb_cursor):
     return df
 
 #%% Query for station locations with HSPF related constituents
- 
+
+def info(station_ids, connection: Optional[oracledb.Connection] = None):
+    '''Get information for given station IDs from Oracle database.'''
+    conn = connection if connection is not None else CONNECTION
+    if conn is None:
+        raise ValueError("No connection provided and global CONNECTION is not set. Call connect() first or pass a connection.")
+    
+    df = normalize(download(station_ids, connection=conn)).drop_duplicates(subset=['station_id','constituent'])
+    return df
+
+    
+
+
 def download(station_ids, connection: Optional[oracledb.Connection] = None):
     '''Download data for given station IDs from Oracle database.
     This grabs data from the Data access Layer (DAL) equis result view for

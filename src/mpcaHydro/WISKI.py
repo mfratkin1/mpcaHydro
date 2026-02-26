@@ -218,7 +218,7 @@ def _download(constituent,station_nos,start_year = 1996,end_year = 2030,wplmn = 
     return df
 
 
-def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 4, as_json = False):
+def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 2, as_json = False):
     frames = [pd.DataFrame()]
 
     for start in range(start_year,end_year,interval):
@@ -234,6 +234,14 @@ def download_chunk(ts_id,start_year = 1996,end_year = 2030, interval = 4, as_jso
 def convert_to_df(ts_ids,start_year = 1996,end_year = 2030):
     dfs = []
     for ts_id in ts_ids:
+        ts_info = pywisk.get_ts_ids(ts_ids = ts_id)[['from','to']]
+        
+        # Subset start and end years based on available data if possible.
+        if not ts_info['from'].iloc[0] == '':
+            start_year = ts_info['from'].str[0:4].astype(int).iloc[0]
+        if not ts_info['to'].iloc[0] == '':
+            end_year = ts_info['to'].str[0:4].astype(int).iloc[0]
+        
         dfs.append(download_chunk(ts_id,start_year,end_year))
         time.sleep(.1)
     df =  pd.concat(dfs)

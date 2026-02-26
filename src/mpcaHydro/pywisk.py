@@ -4,14 +4,16 @@ Created on Mon Jul 10 16:18:03 2023
 
 @author: mfratki
 """
+from pathlib import Path
 import requests
 from requests.exceptions import ConnectionError, Timeout, HTTPError, RequestException
 import pandas as pd
 import time
 
+CERT_PATH = str(Path(__file__).resolve().parent/'data\\wiskiweb01.pca.state.mn.us.crt')
 #TODO: Use this url to make sure web service is working https://wiskiweb01.pca.state.mn.us/
 class Service():
-    base_url = 'http://wiskiweb01.pca.state.mn.us/KiWIS/KiWIS?'
+    base_url = 'https://wiskiweb01.pca.state.mn.us/KiWIS/KiWIS?'
     base_dict = {
         'datasource': '0',
         'service': 'kisters',
@@ -28,7 +30,7 @@ class Service():
         try:
             # Using requests.head() to fetch headers is faster than requests.get()
             # as it doesn't download the full content
-            response = requests.head('http://wiskiweb01.pca.state.mn.us', timeout=timeout)
+            response = requests.head('https://wiskiweb01.pca.state.mn.us', timeout=timeout)
             
             # raise_for_status() raises an HTTPError for 4xx or 5xx status codes
             response.raise_for_status() 
@@ -51,7 +53,7 @@ class Service():
 
     def _requestTypes(self):
         url = self.url({'request': 'getrequestinfo'}) 
-        return requests.get(url).json()[0]  
+        return requests.get(url,verify=CERT_PATH).json()[0]  
         
     def getRequests(self):
         return list(self._requestTypes()['Requests'].keys())
@@ -70,7 +72,7 @@ class Service():
     
     def info(self,request_type):
         url = self.url({'request': 'getrequestinfo'})
-        response = requests.get(url)
+        response = requests.get(url, verify=CERT_PATH)
         get_requests = response.json()    
         return get_requests[0]['Requests'].keys()
         
@@ -93,7 +95,7 @@ class Service():
     
     def get_json(self,args_dict):
         # Download request
-        self.response = requests.get(self.url(args_dict))
+        self.response = requests.get(self.url(args_dict), verify=CERT_PATH)
         if self.response.status_code != 200:
             print('Error: ' + self.response.json()['message'])
             self.response.raise_for_status()  # raises exception when not a 2xx response
@@ -192,7 +194,10 @@ def construct_aggregation(interval, aggregation_type):
     return f'aggregate({interval}~{aggregation_type})'
 
 def validate_aggregation_type(aggregation_type):
-    assert(aggregation_type in VALID_AGGREGATION_TYPES or validate_percentile(aggregation_type))
+    if aggregation_type.startswith('perc-'):
+        validate_percentile(aggregation_type)
+    else: 
+        assert(aggregation_type in VALID_AGGREGATION_TYPES)
     return True
    
 def validate_percentile(aggregation_type):
@@ -297,7 +302,8 @@ def get_stations(
     return df
 
 def get_ts_ids(
-                station_nos,
+                station_nos = None,
+                ts_ids = None,
                 parametertype_id = None,
                 stationparameter_no = None,
                 stationgroup_id = None,
@@ -317,6 +323,7 @@ def get_ts_ids(
 
     args ={'request': 'getTimeseriesList',
             'station_no': station_nos,
+            'ts_id': ts_ids,
             'parametertype_id': parametertype_id,
             'stationparameter_no': stationparameter_no,
             'ts_name' : ts_name,

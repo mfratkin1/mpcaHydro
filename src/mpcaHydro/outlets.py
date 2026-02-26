@@ -9,6 +9,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import duckdb
+from mpcaHydro.sql_loader import get_outlets_schema_sql
 #from hspf_tools.calibrator import etlWISKI, etlSWD
 
 
@@ -79,10 +80,14 @@ def equis_station_opnids(model_name):
     opnids = MODL_DB.dropna(subset=['opnids']).query('repo_name == @model_name and source == "equis"')['opnids'].str.split(',').to_list()
     return split_opnids(opnids)
 
-def station_opnids(model_name):
-    opnids = MODL_DB.dropna(subset=['opnids']).query('repo_name == @model_name')['opnids'].str.split(',').to_list()
+def mapped_station_opnids(station_id, station_origin):
+    opnids = MODL_DB.dropna(subset=['opnids']).query('station_id == @station_id and source == @station_origin')['opnids'].str.split(',').to_list()
     return split_opnids(opnids)
 
+def mapped_stations(model_name,station_origin):
+    assert(station_origin in ['wiski', 'equis'])
+    return MODL_DB.dropna(subset=['opnids']).query('repo_name == @model_name and source == @station_origin')['station_id'].tolist()
+    
 def mapped_equis_stations(model_name):
     return MODL_DB.dropna(subset=['opnids']).query('repo_name == @model_name and source == "equis"')['station_id'].tolist()
 
@@ -108,9 +113,8 @@ def init_db(db_path: str,reset: bool = False):
     db_path = Path(db_path)
     if reset and db_path.exists():
         db_path.unlink()
-
     with connect(db_path.as_posix(),False) as con:
-        con.execute(OUTLETS_SCHEMA)
+        con.execute(get_outlets_schema_sql())
 
 
 
@@ -293,60 +297,6 @@ def add_reach(con,
     )
 
 
-OUTLETS_SCHEMA  = """-- schema.sql
--- Simple 3-table design to manage associations between model reaches and observation stations via outlets.
--- Compatible with DuckDB and SQLite.
-
--- Table 1: outlets
--- Represents a logical grouping that ties stations and reaches together.
-CREATE SCHEMA IF NOT EXISTS outlets;
-
-CREATE TABLE IF NOT EXISTS outlets.outlet_groups  (
-  outlet_id INTEGER PRIMARY KEY,
-  repository_name TEXT NOT NULL,
-  outlet_name TEXT,
-  notes TEXT             -- optional: general notes about the outlet grouping
-);
-
--- Table 2: outlet_stations
--- One-to-many: outlet -> stations
-CREATE TABLE IF NOT EXISTS outlets.outlet_stations (
-  outlet_id INTEGER NOT NULL,
-  station_id TEXT NOT NULL,
-  station_origin TEXT NOT NULL,       -- e.g., 'wiski', 'equis'
-  repository_name TEXT NOT NULL,  -- repository model the station is physically located in
-  true_opnid INTEGER NOT NULL,           -- The specific reach the station physically sits on (optional)
-  comments TEXT,             -- Per-station comments, issues, etc.
-  CONSTRAINT uq_station_origin UNIQUE (station_id, station_origin),
-  FOREIGN KEY (outlet_id) REFERENCES outlets.outlet_groups(outlet_id)
-);
-
--- Table 3: outlet_reaches
--- One-to-many: outlet -> reaches
--- A reach can appear in multiple outlets, enabling many-to-many overall.
-CREATE TABLE IF NOT EXISTS outlets.outlet_reaches (
-  outlet_id INTEGER NOT NULL,
-  reach_id INTEGER NOT NULL,    -- model reach identifier (aka opind)
-  repository_name TEXT NOT NULL,  -- optional: where the mapping comes from
-  FOREIGN KEY (outlet_id) REFERENCES outlets.outlet_groups(outlet_id)
-);
-
--- Useful views:
-
--- View: station_reach_pairs
--- Derives the implicit many-to-many station <-> reach relationship via shared outlet_id
-CREATE OR REPLACE VIEW outlets.station_reach_pairs AS
-SELECT
-  s.outlet_id,
-  s.station_id,
-  s.station_origin,
-  r.reach_id,
-  r.repository_name
-FROM outlets.outlet_stations AS s
-JOIN outlets.outlet_reaches AS r
-  ON s.outlet_id = r.outlet_id;
-
-"""  
     
 #row = modl_db.MODL_DB.iloc[0]
 
