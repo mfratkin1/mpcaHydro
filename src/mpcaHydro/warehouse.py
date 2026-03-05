@@ -28,6 +28,23 @@ def init_db(db_path: str,reset: bool = False):
 
 
 
+def validate_schemas(con: duckdb.DuckDBPyConnection):
+    """Validate that the database has the expected schemas and tables."""
+    expected_schemas = {'staging', 'analytics', 'mappings', 'outlets', 'reports'}
+    result = con.execute("SELECT schema_name FROM information_schema.schemata").fetchall()
+    existing_schemas = {row[0] for row in result}
+    missing_schemas = expected_schemas - existing_schemas
+    if missing_schemas:
+        raise ValueError(f"Missing schemas: {missing_schemas}")
+
+def validate_tables(con: duckdb.DuckDBPyConnection, schema: str, expected_tables: set):
+    """Validate that a schema contains the expected tables."""
+    result = con.execute(f"SELECT table_name FROM information_schema.tables WHERE table_schema = ?", [schema]).fetchall()
+    existing_tables = {row[0] for row in result}
+    missing_tables = expected_tables - existing_tables
+    if missing_tables:
+        raise ValueError(f"Missing tables in {schema} schema: {missing_tables}")
+
 def create_schemas(con: duckdb.DuckDBPyConnection):
     """Create staging, analytics, hspf, and reports schemas if they do not exist."""
     con.execute(sql_loader.get_schemas_sql())
