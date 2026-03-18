@@ -352,7 +352,7 @@ def station_reach_pairs(con: duckdb.DuckDBPyConnection):
     query = '''
     SELECT *,
     FROM 
-        reports.station_reach_pairs
+        outlets.station_reach_pairs
     ORDER BY
         outlet_id,
         station_id
