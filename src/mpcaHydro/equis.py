@@ -265,6 +265,13 @@ def replace_nondetects(df):
     df.loc[df['value'].isna(), 'value'] = 0
     return df
 
+def filter_years(df, start_year=1996, end_year=None):
+    '''Filter Equis data to include only samples within a certain year range.'''
+    df = df[df['datetime'].dt.year >= start_year]
+    if end_year is not None:
+        df = df[df['datetime'].dt.year <= end_year]
+    return df
+
 def normalize(df):
     '''Normalize Equis data: select relevant columns.'''
     df = map_constituents(df)
@@ -278,6 +285,7 @@ def transform(df):
     
     df = normalize(df)
     df = replace_nondetects(df)
+    df = filter_years(df)
     if not df.empty:
         df = average_results(df)
     return df

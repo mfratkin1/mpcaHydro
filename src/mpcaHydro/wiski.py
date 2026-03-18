@@ -336,6 +336,14 @@ def filter_quality_codes(df, data_codes):
     '''
     return df.loc[df['quality_code'].isin(data_codes)]
 
+def filter_years(df, start_year=1996, end_year=None):
+    '''Filter Equis data to include only samples within a certain year range.'''
+    df = df[df['datetime'].dt.year >= start_year]
+    if end_year is not None:
+        df = df[df['datetime'].dt.year <= end_year]
+    return df
+
+
 def average_results(df):
     #df['datetime'] = pd.to_datetime(df.loc[:,'datetime'])
     df.loc[:,'datetime'] = df.loc[:,'datetime'].dt.round('h')
@@ -392,6 +400,7 @@ def transform(df, filter_qc_codes = True, data_codes = None, baseflow_method = '
             data_codes = DATA_CODES
         df = filter_quality_codes(df, data_codes)
     df = average_results(df)
+    df = filter_years(df, start_year=1996)
     df = calculate_baseflow(df, method = baseflow_method)
     df['station_origin'] = 'wiski'
     #df.set_index('datetime',inplace=True)
