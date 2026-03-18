@@ -113,12 +113,49 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
     else:
         print(f"Warning: WISKI_QUALITY_CODES.csv not found at {wiski_qc_csv_path}")
 
-def create_outlets_tables(con: duckdb.DuckDBPyConnection):
+
+def attach_outlets_db(con: duckdb.DuckDBPyConnection, outlets_db_path: str):
+    """
+    Attach an external DuckDB database containing outlet definitions.
+    """
+    create_schemas(con)
+
+    con.execute(f"ATTACH DATABASE '{outlets_db_path}' AS outlets_db;")
+
+    tables = con.execute("SHOW TABLES FROM outlets_db").fetchall()
+    print(f"Tables in the source database: {tables}")
+
+    for table in tables:
+        table_name = table[0]  # Extract table name
+        con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM outlets_db.{table_name}")  # Copy table contents
+
+    # -- Step 2: Copy all views --
+    # Retrieve the list of views in the source database
+    views = con.execute("SHOW VIEWS FROM outlets_db").fetchall()
+    print(f"Views in the source database: {views}")
+
+    # Copy each view from source to destination
+    for view in views:
+        view_name = view[0]  # Extract view name
+
+        # Get the CREATE VIEW statement for the view
+        create_view_sql = con.execute(f"SHOW CREATE VIEW outlets_db.{view_name}").fetchone()[0]
+        
+        # Recreate the view in the destination database (remove the `outlets_db.` prefix if exists)
+        create_view_sql = create_view_sql.replace(f"outlets_db.", "")
+        con.execute(create_view_sql)
+
+
+    con.execute(f"ATTACH DATABASE '{outlets_db_path}' AS outlets_db;")
+    # Optional: Detach the source database
+    con.execute("DETACH 'outlets_db'")
+
+
+def create_outlets_tables(con: duckdb.DuckDBPyConnection, model_name: str = None):
     """Create tables in the outlets schema to define outlet-station-reach relationships."""
     con.execute(sql_loader.get_outlets_schema_sql())
     con.execute(sql_loader.get_views_outlets_sql())
-    outlets.build_outlets(con)
-
+    outlets.build_outlets(con, model_name=model_name)
 
 def create_filtered_wiski_view(con: duckdb.DuckDBPyConnection, data_codes: list):
     """Create a view filtering WISKI data based on specified data codes."""

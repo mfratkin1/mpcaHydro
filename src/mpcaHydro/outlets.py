@@ -31,7 +31,15 @@ DB_PATH = str(Path(__file__).resolve().parent/'data\\outlet.duckdb')
 MODL_DB = pd.concat([stations_wiski,stations_equis])
 MODL_DB['opnids'] = MODL_DB['opnids'].str.strip().replace('',pd.NA)
 MODL_DB = MODL_DB.dropna(subset='opnids')
+MODL_DB = MODL_DB.dropna(subset = 'repo_name')
 MODL_DB = MODL_DB.drop_duplicates(['station_id','source']).reset_index(drop=True)
+# Add outlet_id column to MODL_DB based on enumerate grouping
+outlet_id_map = {}
+for outlet_id, (_, group) in enumerate(MODL_DB.drop_duplicates(['station_id','source']).groupby(by=['opnids','repo_name'])):
+    for idx in group.index:
+        outlet_id_map[idx] = int(outlet_id)
+MODL_DB['outlet_id'] = MODL_DB.index.map(outlet_id_map)
+
 
 def _reload():
     global _stations_wiski, stations_wiski, _stations_equis, stations_equis, MODL_DB
@@ -47,7 +55,14 @@ def _reload():
     MODL_DB = pd.concat([stations_wiski,stations_equis])
     MODL_DB['opnids'] = MODL_DB['opnids'].str.strip().replace('',pd.NA)
     MODL_DB = MODL_DB.dropna(subset='opnids')
+    MODL_DB = MODL_DB.dropna(subset = 'repo_name')
     MODL_DB = MODL_DB.drop_duplicates(['station_id','source']).reset_index(drop=True)
+    # Add outlet_id column to MODL_DB based on enumerate grouping
+    outlet_id_map = {}
+    for outlet_id, (_, group) in enumerate(MODL_DB.drop_duplicates(['station_id','source']).groupby(by=['opnids','repo_name'])):
+        for idx in group.index:
+            outlet_id_map[idx] = int(outlet_id)
+    MODL_DB['outlet_id'] = MODL_DB.index.map(outlet_id_map)
 
 
 def split_opnids(opnids: list):
@@ -144,7 +159,7 @@ def get_outlets_by_reach(reach_id: int, model_name: str):
             """,
         [reach_id, model_name]).fetchdf()
     return df
- 
+
 def get_outlets_by_station(station_id: str, station_origin: str):
     """
     Return all outlet rows for outlets that include the given reach_id in the given model_name.
@@ -160,6 +175,47 @@ def get_outlets_by_station(station_id: str, station_origin: str):
         [station_id, station_origin]).fetchdf()
     return df
 
+def get_station_opnids(station_id: str, station_origin: str):
+    """
+    Return all model reach IDs (opnids) associated with the given station ID and origin.
+    """
+    with connect(DB_PATH) as con:
+        df = con.execute(
+        """
+        SELECT r.reach_id
+        FROM outlets.station_reach_pairs r
+        WHERE r.station_id = ? AND r.station_origin = ?
+        """,
+        [station_id, station_origin]).fetchdf()
+    return df['reach_id'].tolist()
+
+def get_outlet_opnids(outlet_id: int):
+    """
+    Return all model reach IDs (opnids) associated with the given outlet ID.
+    """
+    with connect(DB_PATH) as con:
+        df = con.execute(
+        """
+        SELECT r.reach_id
+        FROM outlets.station_reach_pairs r
+        WHERE r.outlet_id = ?
+        """,
+        [outlet_id]).fetchdf()
+    return list(set(df['reach_id'].tolist()))
+
+def get_outlet_stations(outlet_id: int):
+    """
+    Return all station IDs and origins associated with the given outlet ID.
+    """
+    with connect(DB_PATH) as con:
+        df = con.execute(
+        """
+        SELECT r.station_id, r.station_origin
+        FROM outlets.station_reach_pairs r
+        WHERE r.outlet_id = ?
+        """,
+        [outlet_id]).fetchdf()
+    return df[['station_id', 'station_origin']].drop_duplicates().to_dict(orient='records')
 
 
 class OutletGateway:
@@ -179,7 +235,7 @@ class OutletGateway:
         return equis_station_opnids(self.model_name)
 
     def station_opnids(self):
-        return station_opnids(self.model_name)
+        return mapped_station_opnids(self.model_name)
 
     def equis_stations(self):
         return equis_stations(self.model_name)
@@ -207,6 +263,12 @@ class OutletGateway:
         assert(station_id in self.wiski_stations() + self.equis_stations()), f"Station ID {station_id} not found in model {self.model_name}"
         return get_outlets_by_station(station_id, station_origin)
 
+    def get_outlet_opnids(self, outlet_id: int):
+        return get_outlet_opnids(outlet_id)
+    
+    def get_outlet_stations(self, outlet_id: int):
+        return get_outlet_stations(outlet_id)
+    
 # constructors:
 def build_outlet_db(db_path: str = None):
     if db_path is None:
@@ -222,31 +284,15 @@ def build_outlets(con, model_name: str = None):
     else:
         modl_db = MODL_DB
 
-    for index, (_, group) in enumerate(modl_db.drop_duplicates(['station_id','source']).groupby(by = ['opnids','repo_name'])):
-        repo_name = group['repo_name'].iloc[0]    
-        add_outlet(con, outlet_id = index, outlet_name = None, repository_name = repo_name, notes = None)
-        
+    for outlet_id in modl_db['outlet_id'].unique():
+        group = modl_db.query('outlet_id == @outlet_id')
+        repo_name = group['repo_name'].iloc[0]
+        add_outlet(con, outlet_id = int(outlet_id), outlet_name = None, repository_name = repo_name, notes = None)
         opnids = set(split_opnids(group['opnids'].str.split(',').to_list()))
-
         for opnid in opnids:
-            add_reach(con, outlet_id = index, reach_id = int(opnid), repository_name = repo_name)
-
+            add_reach(con, outlet_id = int(outlet_id), reach_id = int(opnid), repository_name = repo_name)
         for _, row in group.drop_duplicates(subset=['station_id', 'source']).iterrows():
-            add_station(con, outlet_id = index, station_id = row['station_id'], station_origin = row['source'], true_opnid = row['true_opnid'], repository_name= repo_name, comments = row['comments'])
-
- 
-def create_outlet_schema(con, model_name : str):
-    for index, (_, group) in enumerate(outlets(model_name)):
-        repo_name = group['repo_name'].iloc[0]    
-        add_outlet(con, outlet_id = index, outlet_name = None, repository_name = repo_name, notes = None)
-        
-        opnids = set(split_opnids(group['opnids'].str.split(',').to_list()))
-
-        for opnid in opnids:
-            add_reach(con, outlet_id = index, reach_id = int(opnid), repository_name = repo_name)
-
-        for _, row in group.drop_duplicates(subset=['station_id', 'source']).iterrows():
-            add_station(con, outlet_id = index, station_id = row['station_id'], station_origin = row['source'], true_opnid = row['true_opnid'], repository_name= repo_name, comments = row['comments'])
+            add_station(con, outlet_id = int(outlet_id), station_id = row['station_id'], station_origin = row['source'], true_opnid = row['true_opnid'], repository_name= repo_name, comments = row['comments'])
 
 
 def add_outlet(con,

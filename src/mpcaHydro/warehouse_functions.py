@@ -101,7 +101,8 @@ def download_wiski_data(
         if overwrite:
             warehouse.drop_station_data(con, station_ids, 'wiski')
         warehouse.add_df_to_table(con, df, 'staging', 'wiski')
-        warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
+        if not df_transformed.empty:
+            warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
         warehouse.update_views(con)
     else:
         print('No data necessary for HSPF calibration from wiski for:', station_ids)
