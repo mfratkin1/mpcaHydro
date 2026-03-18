@@ -54,6 +54,8 @@ observations.duckdb
 
 ### How Data Flows Through the Warehouse
 
+The warehouse download-and-process pipeline currently supports **WISKI** and **EQuIS** data. SWD and CSG modules can download and transform data independently but are not yet integrated into the warehouse pipeline.
+
 1. **Download** — Raw data is fetched from a source (WISKI or EQuIS).
 2. **Staging** — The raw data is loaded directly into the `staging` schema, preserving all original columns exactly as they came from the source system.
 3. **Transform** — The raw data goes through cleaning steps: unit conversions (e.g., micrograms to milligrams, Celsius to Fahrenheit), timezone normalization to Central Standard Time (UTC-6), mapping of technical parameter codes to readable constituent names, removal of invalid quality codes, and averaging of duplicate measurements within the same hour.
