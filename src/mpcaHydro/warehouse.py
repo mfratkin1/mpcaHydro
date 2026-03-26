@@ -1,3 +1,155 @@
+"""
+warehouse
+=========
+
+DuckDB data warehouse for storing, transforming, and querying hydrological
+observation data used in HSPF model calibration.
+
+Overview
+--------
+The warehouse module manages a local DuckDB database that consolidates
+data from multiple sources (WISKI, EQuIS) into a unified, query-ready
+analytical store.  It handles database lifecycle operations — schema
+creation, table creation, data loading, view management — so that
+upstream ETL code (:mod:`wiski`, :mod:`equis`) and downstream query code
+(:class:`~mpcaHydro.warehouse_functions.DataManagerWrapper`) do not need
+to know the underlying SQL.
+
+Database schema
+---------------
+The database is organised into **five schemas**, each serving a distinct
+role in the data pipeline:
+
+**staging**
+    Raw data as received from external systems, with minimal
+    transformation.  Tables mirror the source column layout.
+
+    ``staging.equis``
+        Raw EQuIS result rows (70+ columns) exactly as returned by the
+        Oracle query in :func:`equis.download`.  Key columns include
+        ``SYS_LOC_CODE``, ``CAS_RN``, ``RESULT_NUMERIC``,
+        ``RESULT_UNIT``, ``SAMPLE_DATE_TIME``, and
+        ``SAMPLE_DATE_TIMEZONE``.
+
+    ``staging.wiski``
+        Raw WISKI time-series rows including ``Timestamp``, ``Value``,
+        ``Quality Code``, ``station_no``, ``parametertype_id``,
+        ``stationparameter_no``, ``ts_unitsymbol``, and the
+        ``wplmn_flag``.
+
+**analytics**
+    Cleaned, standardised, and aggregated data ready for analysis.
+    All tables share a common schema:
+    ``(datetime, value, station_id, station_origin, constituent, unit)``.
+
+    ``analytics.equis``
+        Transformed EQuIS data (hourly averages, standard units, mapped
+        constituents) produced by :func:`equis.transform`.
+
+    ``analytics.wiski``
+        Transformed WISKI data (quality-filtered, hourly averages,
+        standard units, baseflow) produced by :func:`wiski.transform`.
+
+    ``analytics.observations`` *(view)*
+        Union of ``analytics.equis`` and ``analytics.wiski``, providing
+        a single virtual table of all observations regardless of source.
+
+    ``analytics.outlet_observations`` *(view)*
+        Observations aggregated by outlet, joining observations to
+        ``outlets.outlet_stations`` so that data is grouped by outlet
+        rather than by individual station.
+
+    ``analytics.outlet_observations_with_flow`` *(view)*
+        Extends ``outlet_observations`` by left-joining discharge (``Q``)
+        and baseflow (``QB``) data alongside each constituent
+        observation.  This is the primary view used for HSPF calibration
+        comparisons.
+
+**outlets**
+    Defines the mapping between monitoring stations and model reaches.
+    See :mod:`outlets` for full documentation.
+
+    ``outlets.outlet_groups``
+        One row per outlet: ``(outlet_id, repository_name, outlet_name,
+        notes)``.
+
+    ``outlets.outlet_stations``
+        Station membership: ``(outlet_id, station_id, station_origin,
+        repository_name, true_opnid, comments)``.  The
+        ``(station_id, station_origin)`` pair is unique across all
+        outlets.
+
+    ``outlets.outlet_reaches``
+        Reach membership: ``(outlet_id, reach_id, repository_name)``.
+        A reach may appear in multiple outlets.
+
+    ``outlets.station_reach_pairs`` *(view)*
+        Convenience view that joins ``outlet_stations`` to
+        ``outlet_reaches`` on ``outlet_id``, deriving the implicit
+        many-to-many station ↔ reach relationship.
+
+**mappings**
+    Lookup tables used during ETL transformations.
+
+    ``mappings.wiski_parametertype``
+        Maps WISKI ``parametertype_id`` to constituent abbreviations.
+
+    ``mappings.equis_casrn``
+        Maps EQuIS CAS registry numbers to constituent abbreviations.
+
+    ``mappings.station_xref``
+        Cross-reference between WISKI and EQuIS station identifiers
+        (loaded from ``data/WISKI_EQUIS_XREF.csv``).
+
+    ``mappings.wiski_quality_codes``
+        WISKI quality-code definitions (loaded from
+        ``data/WISKI_QUALITY_CODES.csv``).
+
+**reports**
+    Pre-built summary views for quick reporting.
+
+    ``reports.wiski_qc_count`` *(view)*
+        Quality-code frequency counts per WISKI station and parameter,
+        joined to quality-code descriptions.
+
+    ``reports.constituent_summary`` *(view)*
+        Per-station, per-constituent summary statistics (count, mean,
+        min, max, date range) across all analytics observations.
+
+    ``reports.outlet_constituent_summary`` *(view)*
+        Same statistics aggregated by outlet instead of station.
+
+Typical workflow
+----------------
+::
+
+    from mpcaHydro import warehouse
+
+    # 1. Create a fresh database
+    warehouse.init_db('observations.duckdb', reset=True)
+
+    # 2. Open a connection and load data
+    with warehouse.connect('observations.duckdb') as con:
+        warehouse.add_df_to_table(con, df_wiski, 'staging', 'wiski')
+        warehouse.add_df_to_table(con, df_equis, 'staging', 'equis')
+        warehouse.update_views(con)
+
+SQL files
+---------
+All DDL statements live in the ``sql/`` folder and are loaded at runtime
+by :mod:`sql_loader`:
+
+* ``schemas.sql`` — ``CREATE SCHEMA`` for all five schemas.
+* ``staging_tables.sql`` — ``CREATE TABLE`` for staging tables.
+* ``analytics_tables.sql`` — ``CREATE TABLE`` for analytics tables.
+* ``outlets_schema.sql`` — outlets schema, tables, and the
+  ``station_reach_pairs`` view.
+* ``views_analytics.sql`` — analytics views (observations,
+  outlet_observations, outlet_observations_with_flow).
+* ``views_reports.sql`` — report views.
+* ``views_outlets.sql`` — outlets views.
+"""
+
 from typing import List
 
 import duckdb
@@ -6,8 +158,21 @@ from pathlib import Path
 from mpcaHydro import outlets
 from mpcaHydro import sql_loader
 
-def init_db(db_path: str,reset: bool = False):
-    """Initialize the DuckDB database: create schemas and tables."""
+def init_db(db_path: str, reset: bool = False):
+    """Initialise the DuckDB warehouse database.
+
+    Creates all schemas (staging, analytics, reports, outlets, mappings),
+    tables, mapping data, outlet data, and views.  This is the primary
+    entry point for standing up a new warehouse.
+
+    Parameters
+    ----------
+    db_path : str
+        Filesystem path for the DuckDB file.
+    reset : bool, default False
+        If ``True``, delete the existing file before creating a fresh
+        database.
+    """
     db_path = Path(db_path)
     if reset and db_path.exists():
         db_path.unlink()
@@ -29,7 +194,19 @@ def init_db(db_path: str,reset: bool = False):
 
 
 def validate_schemas(con: duckdb.DuckDBPyConnection):
-    """Validate that the database has the expected schemas and tables."""
+    """Validate that the database contains all expected schemas.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Raises
+    ------
+    ValueError
+        If any of the expected schemas (staging, analytics, mappings,
+        outlets, reports) are missing.
+    """
     expected_schemas = {'staging', 'analytics', 'mappings', 'outlets', 'reports'}
     result = con.execute("SELECT schema_name FROM information_schema.schemata").fetchall()
     existing_schemas = {row[0] for row in result}
@@ -38,7 +215,22 @@ def validate_schemas(con: duckdb.DuckDBPyConnection):
         raise ValueError(f"Missing schemas: {missing_schemas}")
 
 def validate_tables(con: duckdb.DuckDBPyConnection, schema: str, expected_tables: set):
-    """Validate that a schema contains the expected tables."""
+    """Validate that a schema contains the expected tables.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    schema : str
+        Schema name to inspect.
+    expected_tables : set of str
+        Table names that must exist.
+
+    Raises
+    ------
+    ValueError
+        If any expected tables are missing.
+    """
     result = con.execute(f"SELECT table_name FROM information_schema.tables WHERE table_schema = ?", [schema]).fetchall()
     existing_tables = {row[0] for row in result}
     missing_tables = expected_tables - existing_tables
@@ -46,20 +238,55 @@ def validate_tables(con: duckdb.DuckDBPyConnection, schema: str, expected_tables
         raise ValueError(f"Missing tables in {schema} schema: {missing_tables}")
 
 def create_schemas(con: duckdb.DuckDBPyConnection):
-    """Create staging, analytics, hspf, and reports schemas if they do not exist."""
+    """Create all warehouse schemas (staging, analytics, reports, outlets, mappings).
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     con.execute(sql_loader.get_schemas_sql())
 
 def create_staging_tables(con: duckdb.DuckDBPyConnection):
-    """Create necessary tables in the staging schema."""
+    """Create ``staging.equis`` and ``staging.wiski`` tables.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     con.execute(sql_loader.get_staging_tables_sql())
 
 
 def create_analytics_tables(con: duckdb.DuckDBPyConnection):
-    """Create necessary tables in the analytics schema."""
+    """Create ``analytics.equis`` and ``analytics.wiski`` tables.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     con.execute(sql_loader.get_analytics_tables_sql())
 
 def create_mapping_tables(con: duckdb.DuckDBPyConnection):
-    """Create and populate tables in the mappings schema from Python dicts and CSVs."""
+    """Create and populate lookup tables in the ``mappings`` schema.
+
+    Populates the following from Python dictionaries and CSV files:
+
+    * ``mappings.wiski_parametertype`` — WISKI parameter-type ID →
+      constituent mapping.
+    * ``mappings.equis_casrn`` — CAS registry number → constituent
+      mapping.
+    * ``mappings.station_xref`` — WISKI/EQuIS station cross-reference
+      (from ``data/WISKI_EQUIS_XREF.csv``).
+    * ``mappings.wiski_quality_codes`` — quality-code descriptions
+      (from ``data/WISKI_QUALITY_CODES.csv``).
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     # WISKI parametertype_id -> constituent
     wiski_parametertype_map = {
         '11522': 'TP', 
@@ -115,8 +342,18 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
 
 
 def attach_outlets_db(con: duckdb.DuckDBPyConnection, outlets_db_path: str):
-    """
-    Attach an external DuckDB database containing outlet definitions.
+    """Attach and copy tables/views from an external outlet DuckDB file.
+
+    This is used to import a pre-built outlet database into the current
+    warehouse connection.  All tables and views from the source database
+    are copied into the current connection's default catalog.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection for the warehouse.
+    outlets_db_path : str
+        Path to the external DuckDB file containing outlet definitions.
     """
     create_schemas(con)
 
@@ -152,13 +389,30 @@ def attach_outlets_db(con: duckdb.DuckDBPyConnection, outlets_db_path: str):
 
 
 def create_outlets_tables(con: duckdb.DuckDBPyConnection, model_name: str = None):
-    """Create tables in the outlets schema to define outlet-station-reach relationships."""
+    """Create outlet tables, views, and populate them from :data:`outlets.MODL_DB`.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    model_name : str, optional
+        Restrict outlet population to a single model.  If ``None``, all
+        models are populated.
+    """
     con.execute(sql_loader.get_outlets_schema_sql())
     con.execute(sql_loader.get_views_outlets_sql())
     outlets.build_outlets(con, model_name=model_name)
 
 def create_filtered_wiski_view(con: duckdb.DuckDBPyConnection, data_codes: list):
-    """Create a view filtering WISKI data based on specified data codes."""
+    """Create a view that filters WISKI analytics data by quality codes.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    data_codes : list of int
+        Acceptable quality-code values to include.
+    """
     placeholders = ', '.join(['?'] * len(data_codes))
     query = f"""
     CREATE OR REPLACE VIEW analytics.wiski_filtered AS
@@ -170,7 +424,16 @@ def create_filtered_wiski_view(con: duckdb.DuckDBPyConnection, data_codes: list)
 
 
 def create_aggregated_wiski_view(con: duckdb.DuckDBPyConnection):
-    """Create a view aggregating WISKI data by hour, station, and constituent."""
+    """Create a table aggregating WISKI data to hourly means.
+
+    Groups by ``(station_id, constituent, unit)`` and uses DuckDB's
+    ``time_bucket`` function with a 1-hour interval.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     con.execute("""
     CREATE OR REPLACE Table analytics.wiski_aggregated AS
     SELECT 
@@ -189,14 +452,32 @@ def create_aggregated_wiski_view(con: duckdb.DuckDBPyConnection):
 
 
 def update_views(con: duckdb.DuckDBPyConnection):
-    """Update all views in the database by loading from SQL files."""
+    """Refresh all analytics and reports views from their SQL definitions.
+
+    Call this after loading or modifying data in the staging or analytics
+    tables to ensure that dependent views reflect the latest data.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     con.execute(sql_loader.get_views_analytics_sql())
     con.execute(sql_loader.get_views_reports_sql())
     
 def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-    """
-    Returns a DuckDB connection to the given database path.
-    Ensures the parent directory exists.
+    """Open a DuckDB connection, creating the parent directory if needed.
+
+    Parameters
+    ----------
+    db_path : str
+        Path to the DuckDB database file.
+    read_only : bool, default False
+        Open in read-only mode when ``True``.
+
+    Returns
+    -------
+    duckdb.DuckDBPyConnection
     """
     db_path = Path(db_path)
     parent = db_path.parent
@@ -205,8 +486,19 @@ def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
 
 
 def drop_station_data(con: duckdb.DuckDBPyConnection, station_ids: List[str], station_origin: str):
-    """
-    Drop all data for a specific stations from staging and analytics schemas.
+    """Delete all data for specific stations from staging and analytics.
+
+    Removes matching rows from ``staging.equis``, ``staging.wiski``,
+    ``analytics.equis``, and ``analytics.wiski``, then refreshes views.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    station_ids : list of str
+        Station identifiers to remove.
+    station_origin : str
+        ``'wiski'`` or ``'equis'``.
     """
     placeholders = ', '.join(['?'] * len(station_ids))
     con.execute(f"DELETE FROM staging.equis WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
@@ -216,8 +508,21 @@ def drop_station_data(con: duckdb.DuckDBPyConnection, station_ids: List[str], st
     update_views(con)
 
 def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_name: str) -> list:
-    """
-    Get the column names of a DuckDB table.
+    """Return the column names of a table.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    table_schema : str
+        Schema containing the table.
+    table_name : str
+        Name of the table.
+
+    Returns
+    -------
+    list of str
+        Column names in ordinal position order.
     """
     #table_schema, table_name = table_name.split('.')
     query = """
@@ -231,9 +536,23 @@ def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_na
 
 
 def add_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_schema: str, table_name: str):
-    """
-    Append a pandas DataFrame into a DuckDB table. This will create the table
-    if it does not exist.
+    """Append rows from a DataFrame into an existing DuckDB table.
+
+    The DataFrame columns are reordered to match the target table's
+    schema before insertion.  This is the standard method for
+    incrementally loading data (e.g. new station downloads) into
+    staging or analytics tables.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    df : pandas.DataFrame
+        Data to insert.
+    table_schema : str
+        Target schema (e.g. ``'staging'``).
+    table_name : str
+        Target table (e.g. ``'wiski'``).
     """
     # get existing columns
     existing_columns = get_column_names(con, table_schema, table_name)
@@ -250,9 +569,18 @@ def add_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_sche
     con.unregister("tmp_df")
 
 def load_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str):
-    """
-    Persist a pandas DataFrame into a DuckDB table. This will overwrite the table
-    by default (replace=True).
+    """Replace a DuckDB table with the contents of a DataFrame.
+
+    Creates or replaces the table using ``CREATE OR REPLACE TABLE``.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    df : pandas.DataFrame
+        Data to persist.
+    table_name : str
+        Fully-qualified table name (e.g. ``'analytics.wiski'``).
     """
     # register pandas DF and create table
     con.register("tmp_df", df)
@@ -260,9 +588,18 @@ def load_df_to_table(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_nam
     con.unregister("tmp_df")
 
 def load_df_to_staging(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str, replace: bool = True):
-    """
-    Persist a pandas DataFrame into a staging table. This will overwrite the staging
-    table by default (replace=True).
+    """Load a DataFrame into a ``staging`` table.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    df : pandas.DataFrame
+        Data to persist.
+    table_name : str
+        Table name (without schema prefix).
+    replace : bool, default True
+        Drop and recreate the table if it already exists.
     """
     if replace:
         con.execute(f"DROP TABLE IF EXISTS staging.{table_name}")
@@ -272,9 +609,21 @@ def load_df_to_staging(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_n
     con.unregister("tmp_df")
 
 def load_csv_to_staging(con: duckdb.DuckDBPyConnection, csv_path: str, table_name: str, replace: bool = True, **read_csv_kwargs):
-    """
-    Persist a CSV file into a staging table. This will overwrite the staging
-    table by default (replace=True).
+    """Load a CSV file directly into a ``staging`` table via DuckDB's ``read_csv_auto``.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    csv_path : str
+        Path to the CSV file.
+    table_name : str
+        Table name (without schema prefix).
+    replace : bool, default True
+        Drop and recreate the table if it already exists.
+    **read_csv_kwargs
+        Additional keyword arguments forwarded to DuckDB's
+        ``read_csv_auto`` function.
     """
     if replace:
         con.execute(f"DROP TABLE IF EXISTS staging.{table_name}")
@@ -284,9 +633,18 @@ def load_csv_to_staging(con: duckdb.DuckDBPyConnection, csv_path: str, table_nam
     """)
  
 def load_parquet_to_staging(con: duckdb.DuckDBPyConnection, parquet_path: str, table_name: str, replace: bool = True):
-    """
-    Persist a Parquet file into a staging table. This will overwrite the staging
-    table by default (replace=True).
+    """Load a Parquet file directly into a ``staging`` table.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    parquet_path : str
+        Path to the Parquet file.
+    table_name : str
+        Table name (without schema prefix).
+    replace : bool, default True
+        Drop and recreate the table if it already exists.
     """
     if replace:
         con.execute(f"DROP TABLE IF EXISTS staging.{table_name}")
@@ -297,15 +655,39 @@ def load_parquet_to_staging(con: duckdb.DuckDBPyConnection, parquet_path: str, t
 
 
 def write_table_to_parquet(con: duckdb.DuckDBPyConnection, table_name: str, path: str, compression="snappy"):
-    """
-    Persist a DuckDB table into a Parquet file.
+    """Export a DuckDB table to a Parquet file.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    table_name : str
+        Fully-qualified table name (e.g. ``'analytics.wiski'``).
+    path : str
+        Output Parquet file path.
+    compression : str, default ``'snappy'``
+        Parquet compression codec.
     """
     con.execute(f"COPY (SELECT * FROM {table_name}) TO '{path}' (FORMAT PARQUET, COMPRESSION '{compression}')")
 
 
 def write_table_to_csv(con: duckdb.DuckDBPyConnection, table_name: str, path: str, header: bool = True, sep: str = ',', **kwargs):
-    """
-    Persist a DuckDB table into a CSV file.
+    """Export a DuckDB table to a CSV file.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    table_name : str
+        Fully-qualified table name.
+    path : str
+        Output CSV file path.
+    header : bool, default True
+        Include a header row.
+    sep : str, default ``','``
+        Column delimiter.
+    **kwargs
+        Additional DuckDB ``COPY`` options.
     """
     con.execute(f"COPY (SELECT * FROM {table_name}) TO '{path}' (FORMAT CSV, HEADER {str(header).upper()}, DELIMITER '{sep}' {', '.join(f', {k}={repr(v)}' for k, v in kwargs.items())})")
 
@@ -313,8 +695,16 @@ def write_table_to_csv(con: duckdb.DuckDBPyConnection, table_name: str, path: st
 
 
 def load_df_to_analytics(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table_name: str):
-    """
-    Persist a pandas DataFrame into an analytics table.
+    """Replace an ``analytics`` table with the contents of a DataFrame.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    df : pandas.DataFrame
+        Transformed data to persist.
+    table_name : str
+        Table name (without schema prefix).
     """
     con.execute(f"DROP TABLE IF EXISTS analytics.{table_name}")
     con.register("tmp_df", df)
@@ -323,8 +713,19 @@ def load_df_to_analytics(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, table
 
 
 def migrate_staging_to_analytics(con: duckdb.DuckDBPyConnection, staging_table: str, analytics_table: str):
-    """
-    Migrate data from a staging table to an analytics table.
+    """Copy a staging table directly into the analytics schema.
+
+    The target analytics table is dropped and recreated from the staging
+    table's contents.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    staging_table : str
+        Source table name (without schema prefix).
+    analytics_table : str
+        Destination table name (without schema prefix).
     """
     con.execute(f"DROP TABLE IF EXISTS analytics.{analytics_table}")
     con.execute(f"""
@@ -334,6 +735,22 @@ def migrate_staging_to_analytics(con: duckdb.DuckDBPyConnection, staging_table: 
 
 
 def load_to_analytics(con: duckdb.DuckDBPyConnection, table_name: str):
+    """Aggregate staging EQuIS data and load into an analytics table.
+
+    .. note::
+
+       This function contains a known issue — it references an undefined
+       variable ``df`` after the SQL execution.  Prefer
+       :func:`migrate_staging_to_analytics` or
+       :func:`load_df_to_analytics` for production use.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    table_name : str
+        Target analytics table name (without schema prefix).
+    """
     con.execute(f"""
                 CREATE OR REPLACE TABLE analytics.{table_name} AS
                 SELECT
@@ -358,7 +775,25 @@ def load_to_analytics(con: duckdb.DuckDBPyConnection, table_name: str):
     con.execute(f"CREATE TABLE analytics.{table_name} AS SELECT * FROM tmp_df")
     con.unregister("tmp_df")
 
-def dataframe_to_parquet(con: duckdb.DuckDBPyConnection,  df: pd.DataFrame, path, compression="snappy"):
+def dataframe_to_parquet(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, path, compression="snappy"):
+    """Write a DataFrame to a Parquet file using a temporary DuckDB connection.
+
+    .. note::
+
+       The *con* parameter is currently ignored — a new in-memory
+       connection is created internally.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Unused (retained for API compatibility).
+    df : pandas.DataFrame
+        Data to write.
+    path : str
+        Output Parquet file path.
+    compression : str, default ``'snappy'``
+        Parquet compression codec.
+    """
     # path should be a filename like 'data/raw/equis/equis-20251118.parquet'
     con = duckdb.connect()
     con.register("tmp_df", df)
