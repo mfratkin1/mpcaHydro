@@ -1,5 +1,56 @@
 # -*- coding: utf-8 -*-
-"""Procedural functions for data management operations."""
+"""
+warehouse_functions
+===================
+
+Procedural helpers and the :class:`DataManagerWrapper` convenience class
+for interacting with the mpcaHydro data warehouse.
+
+Overview
+--------
+This module sits between the low-level :mod:`warehouse` database
+operations and the end-user workflow.  It provides:
+
+* **Procedural functions** that combine download, ETL, and warehouse
+  loading into single calls (e.g. :func:`download_wiski_data`).
+* **Query functions** that retrieve observation data, outlet data, and
+  summary statistics from the analytics layer.
+* **Export functions** for writing query results to CSV or Parquet.
+* The :class:`DataManagerWrapper` class, which bundles all of the above
+  behind a single object that manages its own database connections.
+
+Typical workflow (procedural)
+-----------------------------
+::
+
+    from mpcaHydro import warehouse, warehouse_functions as wf
+
+    # Initialise a new warehouse
+    wf.init_warehouse('observations.duckdb', reset=True)
+
+    # Open a connection and download + load WISKI data
+    with warehouse.connect('observations.duckdb') as con:
+        wf.download_wiski_data(con, ['E66050001'], start_year=2000)
+
+Typical workflow (wrapper class)
+---------------------------------
+::
+
+    from mpcaHydro.warehouse_functions import DataManagerWrapper
+
+    dm = DataManagerWrapper('observations.duckdb', reset=True)
+    dm.download_wiski_data(['E66050001'], start_year=2000)
+    df = dm.get_observation_data(['E66050001'], 'Q', agg_period='D')
+
+Key data structures
+-------------------
+``AGG_DEFAULTS``
+    Maps unit strings to default aggregation functions (``'mean'`` for
+    concentration and flow units, ``'sum'`` for mass units like ``'lb'``).
+
+``UNIT_DEFAULTS``
+    Maps constituent abbreviations to their expected unit strings.
+"""
 
 from pathlib import Path
 from typing import List, Optional, Union
@@ -30,12 +81,39 @@ UNIT_DEFAULTS = {
 
 
 def get_db_path(folderpath: Union[str, Path]) -> Path:
-    """Get the database path for a given folder."""
+    """Construct the default database file path for a project folder.
+
+    Parameters
+    ----------
+    folderpath : str or Path
+        Project directory.
+
+    Returns
+    -------
+    pathlib.Path
+        ``folderpath / 'observations.duckdb'``.
+    """
     return Path(folderpath) / 'observations.duckdb'
 
 
 def init_warehouse(db_path: Union[str, Path], reset: bool = False) -> Path:
-    """Initialize the data warehouse database and return the db_path."""
+    """Initialise the data warehouse database and return the path.
+
+    Delegates to :func:`warehouse.init_db` to create all schemas,
+    tables, mapping data, and views.
+
+    Parameters
+    ----------
+    db_path : str or Path
+        Path to the DuckDB file.
+    reset : bool, default False
+        Delete the existing file before creating a fresh database.
+
+    Returns
+    -------
+    pathlib.Path
+        The resolved database path.
+    """
     from mpcaHydro import warehouse
     db_path = Path(db_path)
     warehouse.init_db(db_path.as_posix(), reset)
@@ -43,7 +121,13 @@ def init_warehouse(db_path: Union[str, Path], reset: bool = False) -> Path:
 
 
 def update_views(con: duckdb.DuckDBPyConnection) -> None:
-    """Update all database views."""
+    """Refresh all analytics and reports views.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     from mpcaHydro import warehouse
     warehouse.update_views(con)
 
@@ -54,7 +138,23 @@ def process_wiski_data(
     data_codes: Optional[List[int]] = None,
     baseflow_method: str = 'Boughton'
 ) -> None:
-    """Process WISKI data from staging to analytics."""
+    """Read WISKI staging data, transform it, and load into analytics.
+
+    Reads all rows from ``staging.wiski``, applies :func:`wiski.transform`
+    (quality-code filtering, unit conversion, hourly averaging, and baseflow
+    separation), and writes the result to ``analytics.wiski``.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    filter_qc_codes : bool, default True
+        Apply quality-code filtering during transformation.
+    data_codes : list of int, optional
+        Custom quality-code whitelist (defaults to ``wiski.DATA_CODES``).
+    baseflow_method : str, default ``'Boughton'``
+        Algorithm for baseflow separation.
+    """
     from mpcaHydro import wiski, warehouse
     df = con.execute("SELECT * FROM staging.wiski").df()
     df_transformed = wiski.transform(df, filter_qc_codes, data_codes, baseflow_method)
@@ -63,7 +163,18 @@ def process_wiski_data(
 
 
 def process_equis_data(con: duckdb.DuckDBPyConnection) -> None:
-    """Process EQuIS data from staging to analytics."""
+    """Read EQuIS staging data, transform it, and load into analytics.
+
+    Reads all rows from ``staging.equis``, applies :func:`equis.transform`
+    (constituent mapping, timezone normalisation, unit conversion, non-detect
+    replacement, and hourly averaging), and writes the result to
+    ``analytics.equis``.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    """
     from mpcaHydro import equis, warehouse
     df = con.execute("SELECT * FROM staging.equis").df()
     df_transformed = equis.transform(df)
@@ -77,7 +188,22 @@ def process_all_data(
     data_codes: Optional[List[int]] = None,
     baseflow_method: str = 'Boughton'
 ) -> None:
-    """Process all data (WISKI and EQuIS) from staging to analytics."""
+    """Process both WISKI and EQuIS staging data into analytics.
+
+    Convenience function that calls :func:`process_wiski_data` and
+    :func:`process_equis_data` in sequence.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    filter_qc_codes : bool, default True
+        Apply quality-code filtering for WISKI data.
+    data_codes : list of int, optional
+        Custom quality-code whitelist.
+    baseflow_method : str, default ``'Boughton'``
+        Algorithm for baseflow separation.
+    """
     process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
     process_equis_data(con)
 
@@ -92,7 +218,37 @@ def download_wiski_data(
     baseflow_method: str = 'Boughton',
     overwrite: bool = True
 ) -> None:
-    """Download WISKI data for given station IDs and load into the warehouse."""    
+    """Download WISKI data, transform it, and load both raw and analytics.
+
+    End-to-end convenience function that:
+
+    1. Downloads raw data from the KISTERS API via :func:`wiski.download`.
+    2. Transforms it via :func:`wiski.transform`.
+    3. Optionally drops existing data for the stations (when *overwrite*
+       is ``True``).
+    4. Appends raw data to ``staging.wiski`` and transformed data to
+       ``analytics.wiski``.
+    5. Refreshes database views.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    station_ids : list of str
+        WISKI station numbers to download.
+    start_year : int, default 1996
+        First calendar year.
+    end_year : int, default 2030
+        Last calendar year.
+    filter_qc_codes : bool, default True
+        Apply quality-code filtering.
+    data_codes : list of int, optional
+        Custom quality-code whitelist.
+    baseflow_method : str, default ``'Boughton'``
+        Algorithm for baseflow separation.
+    overwrite : bool, default True
+        Drop existing data for these stations before inserting.
+    """    
 
     df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
     if not df.empty:
@@ -115,7 +271,31 @@ def download_equis_data(
     oracle_password: str,
     overwrite: bool = True
 ) -> None:
-    """Download EQuIS data for given station IDs and load into the warehouse."""    
+    """Download EQuIS data, transform it, and load both raw and analytics.
+
+    End-to-end convenience function that:
+
+    1. Connects to the Oracle EQuIS database.
+    2. Downloads raw data via :func:`equis.download`.
+    3. Transforms it via :func:`equis.transform`.
+    4. Optionally drops existing data for the stations.
+    5. Appends raw data to ``staging.equis`` and transformed data to
+       ``analytics.equis``.
+    6. Refreshes database views.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Writable DuckDB connection.
+    station_ids : list of str
+        EQuIS ``SYS_LOC_CODE`` values.
+    oracle_username : str
+        Oracle database username.
+    oracle_password : str
+        Oracle database password.
+    overwrite : bool, default True
+        Drop existing data for these stations before inserting.
+    """    
     with equis.connect(user=oracle_username, password=oracle_password) as oracle_conn:
         print('Connected to Oracle database.')
         df = equis.download(station_ids, connection=oracle_conn)
@@ -132,7 +312,21 @@ def download_equis_data(
     
 
 def get_outlets(con: duckdb.DuckDBPyConnection, model_name: str) -> pd.DataFrame:
-    """Get outlet data for a given model."""
+    """Query outlet station-reach pairs for a model.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    model_name : str
+        Repository name.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Rows from ``outlets.station_reach_pairs`` ordered by
+        ``outlet_id``.
+    """
     query = '''
     SELECT *
     FROM outlets.station_reach_pairs
@@ -145,7 +339,20 @@ def get_station_ids(
     con: duckdb.DuckDBPyConnection,
     station_origin: Optional[str] = None
 ) -> List[str]:
-    """Get list of station IDs, optionally filtered by origin."""
+    """Return distinct station IDs from the analytics observations.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_origin : str, optional
+        Filter to a specific origin (``'wiski'`` or ``'equis'``).
+        When ``None``, all stations are returned.
+
+    Returns
+    -------
+    list of str
+    """
     if station_origin is None:
         query = '''
         SELECT DISTINCT station_id, station_origin
@@ -166,7 +373,36 @@ def get_observation_data(
     constituent: str,
     agg_period: Optional[str] = None
 ) -> pd.DataFrame:
-    """Get observation data for given stations and constituent."""
+    """Retrieve observation data for given stations and constituent.
+
+    Optionally resamples to a coarser time period using the default
+    aggregation function for the constituent's unit (mean for
+    concentrations and flow, sum for mass loads).
+
+    **Why resample?**
+    Model calibration often compares at daily or monthly resolution.
+    Resampling in the query layer avoids repeating aggregation logic in
+    every downstream consumer.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_ids : list of str
+        Station identifiers.
+    constituent : str
+        Constituent abbreviation (e.g. ``'TP'``).
+    agg_period : str, optional
+        Pandas resample period string (e.g. ``'D'`` for daily, ``'M'``
+        for monthly).  If ``None``, data is returned at its native
+        hourly resolution.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``datetime`` with an ``observed`` column.
+        ``df.attrs`` contains ``unit`` and ``constituent`` metadata.
+    """
     query = '''
     SELECT *
     FROM analytics.observations
@@ -194,7 +430,32 @@ def get_outlet_data(
     constituent: str,
     agg_period: str = 'D'
 ) -> pd.DataFrame:
-    """Get outlet observation data with flow for a given outlet and constituent."""
+    """Retrieve outlet-level observations with paired flow and baseflow.
+
+    Queries ``analytics.outlet_observations_with_flow``, which joins
+    constituent observations with discharge (``Q``) and baseflow (``QB``)
+    at matching timestamps.  This is the primary query for HSPF
+    calibration: it produces a DataFrame with ``observed``,
+    ``observed_flow``, and ``observed_baseflow`` columns that can be
+    directly compared to model output.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    outlet_id : int
+        Outlet group identifier.
+    constituent : str
+        Constituent abbreviation (e.g. ``'TSS'``).
+    agg_period : str, default ``'D'``
+        Pandas resample period string.  Use ``None`` for hourly.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Indexed by ``datetime`` with columns ``observed``,
+        ``observed_flow``, ``observed_baseflow``.
+    """
     query = '''
     SELECT *
     FROM analytics.outlet_observations_with_flow
@@ -225,7 +486,21 @@ def get_station_data(
     station_id: str,
     station_origin: str
 ) -> pd.DataFrame:
-    """Get all observation data for a specific station."""
+    """Retrieve all analytics observations for a specific station.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_id : str
+        Station identifier.
+    station_origin : str
+        ``'wiski'`` or ``'equis'``.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     query = '''
     SELECT *
     FROM analytics.observations
@@ -238,7 +513,26 @@ def get_raw_data(
     station_id: str,
     station_origin: str
 ) -> pd.DataFrame:
-    """Get raw staging data for a specific station."""
+    """Retrieve raw staging data for a specific station.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_id : str
+        Station identifier.
+    station_origin : str
+        ``'wiski'`` or ``'equis'``.
+
+    Returns
+    -------
+    pandas.DataFrame
+
+    Raises
+    ------
+    ValueError
+        If *station_origin* is not recognised.
+    """
     if station_origin.lower() == 'equis':
         query = '''
         SELECT *
@@ -255,7 +549,21 @@ def get_raw_data(
 
 
 def get_constituent_summary(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Get summary of constituents across all stations."""
+    """Return a summary of sample counts and date ranges by constituent.
+
+    Aggregates ``analytics.observations`` by ``(station_id,
+    station_origin, constituent)`` and reports the sample count, earliest
+    year, and latest year.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     query = '''
     SELECT
       station_id,
@@ -279,7 +587,19 @@ def export_station_to_csv(
     station_origin: str,
     output_path: Union[str, Path]
 ) -> None:
-    """Export station data to a CSV file."""
+    """Export analytics observation data for a station to CSV.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_id : str
+        Station identifier.
+    station_origin : str
+        ``'wiski'`` or ``'equis'``.
+    output_path : str or Path
+        Destination CSV file path.
+    """
     df = get_station_data(con, station_id, station_origin)
     df.to_csv(output_path, index=False)
 
@@ -290,24 +610,78 @@ def export_raw_to_csv(
     station_origin: str,
     output_path: Union[str, Path]
 ) -> None:
-    """Export raw staging data to a CSV file."""
+    """Export raw staging data for a station to CSV.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    station_id : str
+        Station identifier.
+    station_origin : str
+        ``'wiski'`` or ``'equis'``.
+    output_path : str or Path
+        Destination CSV file path.
+    """
     df = get_raw_data(con, station_id, station_origin)
     df.to_csv(output_path, index=False)
 
 
 def get_equis_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Get an empty DataFrame with EQuIS staging table schema."""
+    """Return an empty DataFrame matching the ``staging.equis`` schema.
+
+    Useful for constructing manual data frames that can be appended to
+    the staging table.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Zero rows, columns matching ``staging.equis``.
+    """
     query = '''SELECT * FROM staging.equis LIMIT 0'''
     return con.execute(query).fetch_df()
 
 
 def get_wiski_template(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Get an empty DataFrame with WISKI staging table schema."""
+    """Return an empty DataFrame matching the ``staging.wiski`` schema.
+
+    Useful for constructing manual data frames that can be appended to
+    the staging table.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Zero rows, columns matching ``staging.wiski``.
+    """
     query = '''SELECT * FROM staging.wiski LIMIT 0'''
     return con.execute(query).fetch_df()
 
 
 def outlet_summary(con: duckdb.DuckDBPyConnection):
+    """Return the outlet-level constituent summary report.
+
+    Queries ``reports.outlet_constituent_summary`` for sample counts,
+    averages, min/max values, and date ranges per outlet and constituent.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     query = '''
     SELECT *,
     FROM 
@@ -321,6 +695,21 @@ def outlet_summary(con: duckdb.DuckDBPyConnection):
         
 
 def wiski_qc_counts(con: duckdb.DuckDBPyConnection):
+    """Return WISKI quality-code frequency counts.
+
+    Queries ``reports.wiski_qc_count`` which tallies quality codes per
+    station and parameter, joined to human-readable descriptions from
+    ``mappings.wiski_quality_codes``.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     query = '''
     SELECT *,
     FROM 
@@ -332,7 +721,24 @@ def wiski_qc_counts(con: duckdb.DuckDBPyConnection):
     df = con.execute(query).fetch_df()
     return df
 
-def station_summary(con: duckdb.DuckDBPyConnection,constituent: str = None):
+def station_summary(con: duckdb.DuckDBPyConnection, constituent: str = None):
+    """Return per-station constituent summary statistics.
+
+    Queries ``reports.constituent_summary`` for sample counts, averages,
+    min/max values, and date ranges.  Optionally filters to a single
+    constituent.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+    constituent : str, optional
+        Filter to a specific constituent abbreviation.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     
     query = '''
     SELECT *,
@@ -349,6 +755,17 @@ def station_summary(con: duckdb.DuckDBPyConnection,constituent: str = None):
     return df
 
 def station_reach_pairs(con: duckdb.DuckDBPyConnection):
+    """Return all station-reach pair records from the outlets schema.
+
+    Parameters
+    ----------
+    con : duckdb.DuckDBPyConnection
+        Open DuckDB connection.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
     query = '''
     SELECT *,
     FROM 
@@ -361,40 +778,118 @@ def station_reach_pairs(con: duckdb.DuckDBPyConnection):
     return df
 
 class DataManagerWrapper:
-    """Minimal wrapper class that calls procedural functions with context-managed connections."""
+    """Convenience wrapper that manages DuckDB connections for warehouse operations.
+
+    ``DataManagerWrapper`` provides the same functionality as the
+    module-level procedural functions, but bundles them behind a single
+    object that owns the database path and creates context-managed
+    connections on every call.  This removes the need for callers to open
+    and close connections manually.
+
+    **When to use DataManagerWrapper:**
+
+    * Interactive exploration in a Jupyter notebook where you want a
+      persistent handle to the warehouse.
+    * Application code that performs many sequential operations on the
+      same database.
+
+    **When to use the procedural functions instead:**
+
+    * When you already have an open ``duckdb.DuckDBPyConnection`` (e.g.
+      inside a ``with`` block).
+    * When you need fine-grained control over transaction boundaries.
+
+    Parameters
+    ----------
+    db_path : str or Path
+        Path to the DuckDB warehouse file.
+    reset : bool, default False
+        If ``True``, re-initialise the database (delete and recreate).
+
+    Attributes
+    ----------
+    db_path : pathlib.Path
+        Resolved path to the DuckDB file.
+
+    Examples
+    --------
+    >>> dm = DataManagerWrapper('observations.duckdb', reset=True)
+    >>> dm.download_wiski_data(['E66050001'])
+    >>> df = dm.get_observation_data(['E66050001'], 'Q', agg_period='D')
+    """
     
     def __init__(self, db_path: Union[str, Path], reset: bool = False):
-        """Initialize wrapper with database path."""
+        """Initialise the wrapper with a database path.
+
+        Parameters
+        ----------
+        db_path : str or Path
+            Path to the DuckDB warehouse file.
+        reset : bool, default False
+            Re-initialise the database when ``True``.
+        """
         self.db_path = Path(db_path)
         if reset:
             self._init_warehouse(reset=True)
     
     def _init_warehouse(self, reset: bool = False) -> None:
-        """Initialize the data warehouse database."""
+        """Initialise the underlying data warehouse database.
+
+        Parameters
+        ----------
+        reset : bool, default False
+            Delete and recreate the database.
+        """
         init_warehouse(self.db_path, reset)
 
     def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-        """Create a database connection."""
+        """Create a DuckDB connection to the warehouse.
+
+        Parameters
+        ----------
+        read_only : bool, default False
+            Open in read-only mode.
+
+        Returns
+        -------
+        duckdb.DuckDBPyConnection
+        """
         return warehouse.connect(self.db_path.as_posix(), read_only=read_only)
     
     def update_views(self) -> None:
-        """Update all database views."""
+        """Refresh all analytics and reports views."""
         with self._connect(read_only=False) as con:
             update_views(con)
     
     def wiski_qc_counts(self):
+        """Return WISKI quality-code frequency counts.
+
+        See :func:`wiski_qc_counts` for details.
+        """
         with self._connect(read_only=True) as con:
             return wiski_qc_counts(con)
         
-    def station_summary(self,constituent: str = None):
+    def station_summary(self, constituent: str = None):
+        """Return per-station constituent summary statistics.
+
+        See :func:`station_summary` for details.
+        """
         with self._connect(read_only=True) as con:
             return station_summary(con,constituent)
         
     def station_reach_pairs(self):
+        """Return all station-reach pair records.
+
+        See :func:`station_reach_pairs` for details.
+        """
         with self._connect(read_only=True) as con:
             return station_reach_pairs(con)
         
     def outlet_summary(self):
+        """Return outlet-level constituent summary.
+
+        See :func:`outlet_summary` for details.
+        """
         with self._connect(read_only=True) as con:
             return outlet_summary(con)
     
@@ -405,12 +900,18 @@ class DataManagerWrapper:
         data_codes: Optional[List[int]] = None,
         baseflow_method: str = 'Boughton'
     ) -> None:
-        """Process WISKI data from staging to analytics."""
+        """Process WISKI data from staging to analytics.
+
+        See :func:`process_wiski_data` for details.
+        """
         with self._connect(read_only=False) as con:
             process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
     
     def process_equis_data(self) -> None:
-        """Process EQuIS data from staging to analytics."""
+        """Process EQuIS data from staging to analytics.
+
+        See :func:`process_equis_data` for details.
+        """
         with self._connect(read_only=False) as con:
             process_equis_data(con)
     
@@ -420,7 +921,10 @@ class DataManagerWrapper:
         data_codes: Optional[List[int]] = None,
         baseflow_method: str = 'Boughton'
     ) -> None:
-        """Process all data (WISKI and EQuIS) from staging to analytics."""
+        """Process all data (WISKI and EQuIS) from staging to analytics.
+
+        See :func:`process_all_data` for details.
+        """
         with self._connect(read_only=False) as con:
             process_all_data(con, filter_qc_codes, data_codes, baseflow_method)
     
@@ -434,7 +938,10 @@ class DataManagerWrapper:
         baseflow_method: str = 'Boughton',
         replace: bool = False
     ) -> None:
-        """Download WISKI data for given station IDs and load into the warehouse."""
+        """Download WISKI data and load into the warehouse.
+
+        See :func:`download_wiski_data` for details.
+        """
         with self._connect(read_only=False) as con:
             download_wiski_data(
                 con, station_ids, start_year, end_year,
@@ -448,17 +955,26 @@ class DataManagerWrapper:
         oracle_password: str,
         replace: bool = False
     ) -> None:
-        """Download EQuIS data for given station IDs and load into the warehouse."""
+        """Download EQuIS data and load into the warehouse.
+
+        See :func:`download_equis_data` for details.
+        """
         with self._connect(read_only=False) as con:
             download_equis_data(con, station_ids, oracle_username, oracle_password, replace)
     
     def get_outlets(self, model_name: str) -> pd.DataFrame:
-        """Get outlet data for a given model."""
+        """Get outlet station-reach pairs for a model.
+
+        See :func:`get_outlets` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_outlets(con, model_name)
     
     def get_station_ids(self, station_origin: Optional[str] = None) -> List[str]:
-        """Get list of station IDs, optionally filtered by origin."""
+        """Get station IDs, optionally filtered by origin.
+
+        See :func:`get_station_ids` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_station_ids(con, station_origin)
     
@@ -468,7 +984,10 @@ class DataManagerWrapper:
         constituent: str,
         agg_period: Optional[str] = None
     ) -> pd.DataFrame:
-        """Get observation data for given stations and constituent."""
+        """Get observation data for given stations and constituent.
+
+        See :func:`get_observation_data` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_observation_data(con, station_ids, constituent, agg_period)
     
@@ -478,22 +997,34 @@ class DataManagerWrapper:
         constituent: str,
         agg_period: str = 'D'
     ) -> pd.DataFrame:
-        """Get outlet observation data with flow for a given outlet and constituent."""
+        """Get outlet observations with paired flow and baseflow.
+
+        See :func:`get_outlet_data` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_outlet_data(con, outlet_id, constituent, agg_period)
     
     def get_station_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
-        """Get all observation data for a specific station."""
+        """Get all analytics observations for a station.
+
+        See :func:`get_station_data` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_station_data(con, station_id, station_origin)
     
     def get_raw_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
-        """Get raw staging data for a specific station."""
+        """Get raw staging data for a station.
+
+        See :func:`get_raw_data` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_raw_data(con, station_id, station_origin)
     
     def get_constituent_summary(self) -> pd.DataFrame:
-        """Get summary of constituents across all stations."""
+        """Get constituent summary across all stations.
+
+        See :func:`get_constituent_summary` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_constituent_summary(con)
     
@@ -503,7 +1034,10 @@ class DataManagerWrapper:
         station_origin: str,
         output_path: Union[str, Path]
     ) -> None:
-        """Export station data to a CSV file."""
+        """Export analytics data for a station to CSV.
+
+        See :func:`export_station_to_csv` for details.
+        """
         with self._connect(read_only=True) as con:
             export_station_to_csv(con, station_id, station_origin, output_path)
     
@@ -513,16 +1047,25 @@ class DataManagerWrapper:
         station_origin: str,
         output_path: Union[str, Path]
     ) -> None:
-        """Export raw staging data to a CSV file."""
+        """Export raw staging data for a station to CSV.
+
+        See :func:`export_raw_to_csv` for details.
+        """
         with self._connect(read_only=True) as con:
             export_raw_to_csv(con, station_id, station_origin, output_path)
     
     def get_equis_template(self) -> pd.DataFrame:
-        """Get an empty DataFrame with EQuIS staging table schema."""
+        """Get an empty DataFrame matching the ``staging.equis`` schema.
+
+        See :func:`get_equis_template` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_equis_template(con)
     
     def get_wiski_template(self) -> pd.DataFrame:
-        """Get an empty DataFrame with WISKI staging table schema."""
+        """Get an empty DataFrame matching the ``staging.wiski`` schema.
+
+        See :func:`get_wiski_template` for details.
+        """
         with self._connect(read_only=True) as con:
             return get_wiski_template(con)
