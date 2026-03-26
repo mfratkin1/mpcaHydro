@@ -29,3 +29,9 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python"
 ]
+
+[project.optional-dependencies]
+docs = [
+  "sphinx",
+  "sphinx-autodoc-typehints",
+]
