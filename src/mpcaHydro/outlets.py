@@ -64,51 +64,7 @@ from mpcaHydro.sql_loader import get_outlets_schema_sql
 
 
 #stations_wiski = gpd.read_file('C:/Users/mfratki/Documents/GitHub/pyhcal/src/pyhcal/data/stations_wiski.gpkg')
-
-_stations_wiski = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_wiski.gpkg'))
-stations_wiski = _stations_wiski.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name','wplmn_flag']]
-stations_wiski['source'] = 'wiski'
-_stations_equis = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_EQUIS.gpkg'))
-stations_equis = _stations_equis.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name']]
-stations_equis['source'] = 'equis'
-stations_equis['wplmn_flag'] = 0
-
-
-
-
-DB_PATH = str(Path(__file__).resolve().parent/'data\\outlet.duckdb')
-
-MODL_DB = pd.concat([stations_wiski,stations_equis])
-MODL_DB['opnids'] = MODL_DB['opnids'].str.strip().replace('',pd.NA)
-MODL_DB = MODL_DB.dropna(subset='opnids')
-MODL_DB = MODL_DB.dropna(subset = 'repo_name')
-MODL_DB = MODL_DB.drop_duplicates(['station_id','source']).reset_index(drop=True)
-# Add outlet_id column to MODL_DB based on enumerate grouping
-outlet_id_map = {}
-for outlet_id, (_, group) in enumerate(MODL_DB.drop_duplicates(['station_id','source']).groupby(by=['opnids','repo_name'])):
-    for idx in group.index:
-        outlet_id_map[idx] = int(outlet_id)
-MODL_DB['outlet_id'] = MODL_DB.index.map(outlet_id_map)
-
-
-def _reload():
-    """Reload the in-memory station registries from their GeoPackage sources.
-
-    Refreshes the module-level globals ``_stations_wiski``,
-    ``stations_wiski``, ``_stations_equis``, ``stations_equis``, and
-    :data:`MODL_DB`.  Call this after modifying the bundled GeoPackage
-    files to pick up changes without restarting the interpreter.
-    """
-    global _stations_wiski, stations_wiski, _stations_equis, stations_equis, MODL_DB
-    _stations_wiski = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_wiski.gpkg'))
-    stations_wiski = _stations_wiski.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name','wplmn_flag']]
-    stations_wiski['source'] = 'wiski'
-    _stations_equis = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_EQUIS.gpkg'))
-    stations_equis = _stations_equis.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name']]
-    stations_equis['source'] = 'equis'
-    stations_equis['wplmn_flag'] = 0
-
-
+def _construct_MODL_DB(stations_wiski, stations_equis):
     MODL_DB = pd.concat([stations_wiski,stations_equis])
     MODL_DB['opnids'] = MODL_DB['opnids'].str.strip().replace('',pd.NA)
     MODL_DB = MODL_DB.dropna(subset='opnids')
@@ -120,6 +76,33 @@ def _reload():
         for idx in group.index:
             outlet_id_map[idx] = int(outlet_id)
     MODL_DB['outlet_id'] = MODL_DB.index.map(outlet_id_map)
+    return MODL_DB
+
+def _load_stations():
+    _stations_wiski = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_wiski.gpkg'))
+    stations_wiski = _stations_wiski.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name','wplmn_flag']]
+    stations_wiski['source'] = 'wiski'
+    _stations_equis = gpd.read_file(str(Path(__file__).resolve().parent/'data\\stations_EQUIS.gpkg'))
+    stations_equis = _stations_equis.loc[:,['station_id','true_opnid','opnids','comments','modeled','repo_name']]
+    stations_equis['source'] = 'equis'
+    stations_equis['wplmn_flag'] = 0
+    return _stations_wiski, stations_wiski, _stations_equis, stations_equis
+
+_stations_wiski, stations_wiski, _stations_equis, stations_equis = _load_stations()
+MODL_DB = _construct_MODL_DB(stations_wiski, stations_equis)
+
+#TODO terrible terrible approach, need to refactor
+def _reload():
+    """Reload the in-memory station registries from their GeoPackage sources.
+
+    Refreshes the module-level globals ``_stations_wiski``,
+    ``stations_wiski``, ``_stations_equis``, ``stations_equis``, and
+    :data:`MODL_DB`.  Call this after modifying the bundled GeoPackage
+    files to pick up changes without restarting the interpreter.
+    """
+    global _stations_wiski, stations_wiski, _stations_equis, stations_equis, MODL_DB
+    _stations_wiski, stations_wiski, _stations_equis, stations_equis = _load_stations()
+    MODL_DB = _construct_MODL_DB(stations_wiski, stations_equis)
 
 
 def split_opnids(opnids: list):

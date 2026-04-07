@@ -39,7 +39,10 @@ Key data structures
 import pandas as pd
 from pathlib import Path
 
-WISKI_EQUIS_XREF = pd.read_csv(Path(__file__).parent/'data/WISKI_EQUIS_XREF.csv')
+def _read_xref():
+    return pd.read_csv(Path(__file__).parent/'data/WISKI_EQUIS_XREF.csv')
+
+WISKI_EQUIS_XREF = _read_xref()
 #WISKI_EQUIS_XREF = pd.read_csv('C:/Users/mfratki/Documents/GitHub/hspf_tools/WISKI_EQUIS_XREF.csv')
 
 
