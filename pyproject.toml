@@ -5,12 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "mpcaHydro"
 urls = { "Homepage" = "https://github.com/mfratkin1/mpcaHydro" }  # ? Add this!
-version = "2.1.0"
+version = "2.2.3"
 dependencies = [
   "pandas",
   "requests",
   "pathlib",
-  "duckdb"
+  "duckdb",
+  "oracledb",
+  "baseflow"
 ]
 requires-python = ">=3.8"
 authors = [
@@ -26,4 +28,10 @@ keywords = ["MPCA","Hydrology"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python"
+]
+
+[project.optional-dependencies]
+docs = [
+  "sphinx",
+  "sphinx-autodoc-typehints",
 ]

@@ -26,19 +26,21 @@ CONSTITUENT_MAP = {i[0]:i[1] for i in EQUIS_PARAMETER_XREF[['PARAMETER','constit
 #     return df
 import requests
 
-def _download(station_no):
+def _download(station_id):
     # Replace {station_no} in the URL with the actual station number
-    url = f"https://services.pca.state.mn.us/api/v1/surfacewater/monitoring-stations/results?stationId={station_no}&format=json"
-    
+    #url = f"https://services.pca.state.mn.us/api/v1/surfacewater/monitoring-stations/results?stationId={station_no}&format=json"
+    url = 'https://services.pca.state.mn.us/api/v1/surfacewater/monitoring-stations/results'
+
     try:
         # Send a GET request to the URL
-        response = requests.get(url)
+        params = {
+            'stationId': station_id,
+            'format': 'json'
+        }
+        response = requests.get(url,params = params)
         response.raise_for_status()  # Raise exception for HTTP errors
         # Parse the JSON data
-        if response.json()['recordCount'] == 0:
-            return pd.DataFrame(columns = response.json()['column_names'])
-        else:
-            return pd.DataFrame(response.json()['data'])
+        return pd.DataFrame(response.json()['data'])
     
     except requests.exceptions.RequestException as e:
         print(f"An error occurred: {e}")
@@ -46,14 +48,18 @@ def _download(station_no):
 
 
 
-def download(station_no):
+def download(station_ids):
     #df = pd.read_csv(f'https://services.pca.state.mn.us/api/v1/surfacewater/monitoring-stations/results?stationId={station_no}&format=csv')
-    df = _download(station_no)
-    if df.empty:
-        return df
-    else:
-        df['station_id'] = station_no
-        return transform(df)
+    dfs = []
+    for station_id in station_ids:
+        df = _download(station_id)
+        if not df.empty:
+            df['station_id'] = station_id
+            dfs.append(df)
+
+    return pd.concat(dfs, ignore_index=True)
+
+
 
 def info(station_no):
     #df = pd.read_csv(f'https://services.pca.state.mn.us/api/v1/surfacewater/monitoring-stations/results?stationId={station_no}&format=csv')

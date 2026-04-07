@@ -4,11 +4,13 @@ Created on Mon Jul 10 16:18:03 2023
 
 @author: mfratki
 """
+from pathlib import Path
 import requests
 from requests.exceptions import ConnectionError, Timeout, HTTPError, RequestException
 import pandas as pd
 import time
 
+CERT_PATH = str(Path(__file__).resolve().parent/'data\\wiskiweb01.pca.state.mn.us.crt')
 #TODO: Use this url to make sure web service is working https://wiskiweb01.pca.state.mn.us/
 class Service():
     base_url = 'http://wiskiweb01.pca.state.mn.us/KiWIS/KiWIS?'
@@ -192,7 +194,10 @@ def construct_aggregation(interval, aggregation_type):
     return f'aggregate({interval}~{aggregation_type})'
 
 def validate_aggregation_type(aggregation_type):
-    assert(aggregation_type in VALID_AGGREGATION_TYPES or validate_percentile(aggregation_type))
+    if aggregation_type.startswith('perc-'):
+        validate_percentile(aggregation_type)
+    else: 
+        assert(aggregation_type in VALID_AGGREGATION_TYPES)
     return True
    
 def validate_percentile(aggregation_type):
@@ -297,7 +302,8 @@ def get_stations(
     return df
 
 def get_ts_ids(
-                station_nos,
+                station_nos = None,
+                ts_ids = None,
                 parametertype_id = None,
                 stationparameter_no = None,
                 stationgroup_id = None,
@@ -317,6 +323,7 @@ def get_ts_ids(
 
     args ={'request': 'getTimeseriesList',
             'station_no': station_nos,
+            'ts_id': ts_ids,
             'parametertype_id': parametertype_id,
             'stationparameter_no': stationparameter_no,
             'ts_name' : ts_name,

@@ -4,3 +4,6 @@
 *.whl
 *.gz
 /.vscode
+
+# Sphinx build output
+docs/_build/
