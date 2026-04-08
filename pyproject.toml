@@ -31,7 +31,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+tests = ["pytest"]
 docs = [
   "sphinx",
   "sphinx-autodoc-typehints",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "network: test requires network access to WISKI/KISTERS API",
+    "credentials: test requires Oracle database credentials",
+    "integration: mark test as integration test",
 ]

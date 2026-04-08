@@ -51,4 +51,12 @@ autodoc_typehints = "description"
 # NOTE: outlets.py executes geopandas code at module level, so the mock
 # alone is not sufficient for outlets, warehouse, and warehouse_functions.
 # Install geopandas in your docs build environment to include those modules.
-autodoc_mock_imports = ["geopandas"]
+autodoc_mock_imports = [
+    "baseflow",
+    "duckdb",
+    "geopandas",
+    "numpy",
+    "oracledb",
+    "pandas",
+    "requests",
+]

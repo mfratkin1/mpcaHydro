@@ -79,6 +79,16 @@ CAS_RN_MAP = {'479-61-8':'CHLA',
             'TEMP-W' : 'WT',
             '7664-41-7' : 'NH3'}
 
+_TZ_OFFSET_HOURS = {
+    'CST': -6,
+    'CDT': -5,
+    'UTC':  0,
+    'EST': -5,
+    'EDT': -4,
+}
+
+_TARGET_TZ = 'Etc/GMT+6'  # UTC-6 (note: POSIX convention flips the sign)
+
 def connect(user: str, password: str, host: str = "DELTAT", port: int = 1521, sid: str = "DELTAT"):
     """Create and return an Oracle database connection to the EQuIS instance.
 
@@ -397,6 +407,43 @@ def as_utc_offset(naive_dt: Union[datetime, str], tz_label: str, target_offset: 
     return aware_src.astimezone(target_offset).tz_localize(None)
 
 
+
+def normalize_timezone(df):
+    """Convert naive datetimes + timezone labels to a single target timezone.
+
+    Unknown timezone labels produce NaT and are logged as warnings
+    so they can be investigated without crashing the pipeline.
+    """
+    dt = pd.to_datetime(df['SAMPLE_DATE_TIME'])
+
+    tz_label = df['SAMPLE_DATE_TIMEZONE'].str.strip().str.upper()
+    offset_hours = tz_label.map(_TZ_OFFSET_HOURS)
+
+    # # Log unknown labels — don't crash, just warn
+    unmapped = offset_hours.isna() & tz_label.notna()
+    if unmapped.any():
+        print(f"Warning: {unmapped.sum()} rows have unknown timezone labels: {tz_label[unmapped].unique().tolist()}. These will be set to NaT.")
+    #     bad_labels = tz_label[unmapped].unique().tolist()
+    #     n_bad = unmapped.sum()
+    #     logger.warning(
+    #         f"{n_bad} rows have unknown timezone labels: {bad_labels}. "
+    #         f"These will be set to NaT."
+    #     )
+
+    # Convert to UTC, then to target — unmapped rows stay NaT naturally
+    utc_dt = dt - pd.to_timedelta(offset_hours, unit='h')
+
+    df = df.copy()
+    df['datetime'] = (
+        utc_dt
+        .dt.tz_localize('UTC')
+        .dt.tz_convert(_TARGET_TZ)
+        .dt.tz_localize(None)
+    )
+
+    return df
+
+
 def normalize_columns(df):
     """Select and rename relevant columns from raw EQuIS data.
 
@@ -433,7 +480,7 @@ def normalize_columns(df):
 
 
 
-def normalize_timezone(df):
+def normalize_timezone_legacy(df):
     """Convert EQuIS sample timestamps to a fixed UTC-6 offset.
 
     Iterates over every row, reading ``SAMPLE_DATE_TIME`` and
