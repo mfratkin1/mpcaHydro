@@ -10,183 +10,125 @@ from requests.exceptions import ConnectionError, Timeout, HTTPError, RequestExce
 import pandas as pd
 import time
 
-CERT_PATH = str(Path(__file__).resolve().parent/'data\\wiskiweb01.pca.state.mn.us.crt')
-#TODO: Use this url to make sure web service is working https://wiskiweb01.pca.state.mn.us/
-class Service():
-    base_url = 'http://wiskiweb01.pca.state.mn.us/KiWIS/KiWIS?'
-    base_dict = {
-        'datasource': '0',
-        'service': 'kisters',
-        'type': 'queryServices',
-        'format': 'json'}
-    
-    def __init__(self):
-        self._url = None
-        self._args = None
-        self.response = None
-        
-    def test_connection(self):
-        timeout = 5 
-        try:
-            # Using requests.head() to fetch headers is faster than requests.get()
-            # as it doesn't download the full content
-            response = requests.head('http://wiskiweb01.pca.state.mn.us', timeout=timeout)
-            
-            # raise_for_status() raises an HTTPError for 4xx or 5xx status codes
-            response.raise_for_status() 
-            
-            # If no exception was raised, the website is considered "up"
-            return True, f"Website is UP (Status Code: {response.status_code})"
-        
-        except ConnectionError as e:
-            # Handles DNS failures, refused connections, etc.
-            return False, f"Website is DOWN (Connection Error): {e}"
-        except Timeout as e:
-            # Handles cases where the server takes too long to respond
-            return False, f"Website is DOWN (Timeout Error): {e}"
-        except HTTPError as e:
-            # Handles HTTP errors like 404 Not Found, 500 Internal Server Error, etc.
-            return False, f"Website is experiencing issues (HTTP Error): {e}"
-        except RequestException as e:
-            # Handles any other exceptions that might occur during the request
-            return False, f"An unexpected error occurred: {e}"
-
-    def _requestTypes(self):
-        url = self.url({'request': 'getrequestinfo'}) 
-        return requests.get(url).json()[0]  
-        
-    def getRequests(self):
-        return list(self._requestTypes()['Requests'].keys())
-     
-    def queryfields(self,request_type):
-        return list(self._requestTypes()['Requests'][request_type]['QueryFields']['Content'].keys())
-     
-    def returnfields(self,request_type):
-        return list(self._requestTypes()['Requests'][request_type]['Returnfields']['Content'].keys())
-    
-    def optionalfields(self,request_type):
-        return list(self._requestTypes()['Requests'][request_type]['Optionalfields']['Content'].keys())
-    
-    def formats(self,request_type):
-        return list(self._requestTypes()['Requests'][request_type]['Formats']['Content'].keys())
-    
-    def info(self,request_type):
-        url = self.url({'request': 'getrequestinfo'})
-        response = requests.get(url)
-        get_requests = response.json()    
-        return get_requests[0]['Requests'].keys()
-        
-
-    def url(self,args_dict):
-        args_dict = self.base_dict | args_dict
-        args = []
-        for k,v in args_dict.items():
-            if v is None:
-                continue
-            elif isinstance(v,list):
-                v = [str(vv) for vv in v]
-                v = ','.join(v)    
-            args.append(f'{k}={v}')
-        args = '&'.join(args)
-        
-        url = self.base_url + args
-        self._url = url
-        return url
-    
-    def get_json(self,args_dict):
-        # Download request
-        self.response = requests.get(self.url(args_dict))
-        if self.response.status_code != 200:
-            print('Error: ' + self.response.json()['message'])
-            self.response.raise_for_status()  # raises exception when not a 2xx response
-
-        return  self.response.json()  
-    
-    def df(self,args_dict):
 
 
-        get_requests = self.get_json(args_dict)
-        # Convert to dataframe
-        if args_dict['request'] in ['getTimeseriesValues']:
-            dfs = []
-            for get_request in get_requests:
-                df = pd.DataFrame(get_request['data'],columns = get_request['columns'].split(','))
-                del get_request['data']
-                del get_request['rows']
-                del get_request['columns']  
-                for k,v in get_request.items(): df[k] = v       
-                dfs.append(df)
-            df = pd.concat(dfs)
-        else:
-            df = pd.DataFrame(get_requests[1:], columns = get_requests[0])
-        
-        # print('Done!')
-        return df
-    
-    def get(self,args):
-        request_type = args['request']
-        #assert(request_type in self.getRequests())
-        _args = {queryfield: None for queryfield in self.queryfields(request_type)} | {optionalfield: None for optionalfield in self.optionalfields(request_type)}
-        args = {**_args, **args}
-        self._args = args        
-        return self.df(args)
-    
-    def _filter(self,args):
-        
-        '''
-        Filter for ensuring not too many values are requested and determining the proper division
-        given the number of timeseries, timeseries length, and timeseries sampling interval
-        '''
-        'minute','hour','daily'
-        
-        MAX_OUTPUT = 240000 #True max output is 250,000 but giving myself a bit of a buffer
-        
-        
-        n_timeseries = 1
-        n_years = 1
-        #1 timeseries for 1 year
-        n_values = 60*24*365*n_timeseries*n_years
-        
-        if n_values < MAX_OUTPUT :
-            return 0
-        elif n_timeseries == 1:
-            n_values/MAX_OUTPUT
-                
+from pathlib import Path
+import requests
+from requests.exceptions import ConnectionError, Timeout, HTTPError, RequestException
+import pandas as pd
+import time
 
-    
-'''
-Potential use cases:
-
-1. timeseries for a given ts_id
-2. All timeseries for a given station
-3. All timeseries for a given parameter
-4. All timeseries for a given huc_id    
-5. All timeseries of a given resolution 
-
-'''
-
-''''
-Aggregate (aggregate) - Builds representative periodic values.
-Attributes:	Interval (MANDATORY): HHMMSS, decadal, yearly, year, monthly, month, daily, day, hourly, hour
-Aggregation Types (MANDATORY LIST): min, max, mean, average, total, counts, perc-#
-Returnfields:	Count
-Interpolation Type
-Average
-Quality Code
-Mean
-Total
-Maximum
-Minimum
-Timestamp
-P#
-Examples:	aggregate(daily~total)
-aggregate(yearly~mean~min~max)
-aggregate(hourly~perc-25~perc-75)
-'''
+CERT_PATH = str(Path(__file__).resolve().parent / 'data' / 'wiskiweb01.pca.state.mn.us.crt')
 
 VALID_AGGREGATION_TYPES = ['min', 'max', 'mean', 'average', 'total', 'counts']
 VALID_INTERVALS = ['decadal', 'yearly', 'year', 'monthly', 'month', 'daily', 'day', 'hourly', 'hour']
-SERVICE = Service()
+BASE_URL = 'http://wiskiweb01.pca.state.mn.us/KiWIS/KiWIS'
+BASE_PARAMS = {
+    'datasource': '0',
+    'service': 'kisters',
+    'type': 'queryServices',
+    'format': 'json',
+}
+_last_url = None  # For debugging purposes, to see the last URL that was requested
+
+
+
+def _format_params(args_dict):
+    """Merge base params with request args, converting lists to comma-separated strings
+    and dropping None values."""
+    merged = {**BASE_PARAMS, **args_dict}
+    return {
+        k: ','.join(str(item) for item in v) if isinstance(v, list) else v
+        for k, v in merged.items()
+        if v is not None
+    }
+
+
+def construct_url(args_dict):
+    """Return the full URL that would be sent, without making a request."""
+    from requests import Request
+    prepared = _format_params(args_dict)
+    return Request('GET', BASE_URL, params=prepared).prepare().url
+
+
+
+def _get(params):
+    """Issue a GET request and return the requests.Response object."""
+    global _last_url
+    prepared = _format_params(params)
+    response = requests.get(BASE_URL, params=prepared)
+    response.raise_for_status()
+    _last_url = response.url  # Store the last URL for debugging
+    return response
+
+
+# ── Connection test ──────────────────────────────────────────────────
+def test_connection():
+    try:
+        response = requests.head('http://wiskiweb01.pca.state.mn.us', timeout=5)
+        response.raise_for_status()
+        return True, f"Website is UP (Status Code: {response.status_code})"
+    except ConnectionError as e:
+        return False, f"Website is DOWN (Connection Error): {e}"
+    except Timeout as e:
+        return False, f"Website is DOWN (Timeout Error): {e}"
+    except HTTPError as e:
+        return False, f"Website is experiencing issues (HTTP Error): {e}"
+    except RequestException as e:
+        return False, f"An unexpected error occurred: {e}"
+
+
+# ── Introspection helpers ────────────────────────────────────────────
+def _request_types():
+    return _get({'request': 'getrequestinfo'}).json()[0]
+
+def getRequests():
+    return list(_request_types()['Requests'].keys())
+
+def queryfields(request_type):
+    return list(_request_types()['Requests'][request_type]['QueryFields']['Content'].keys())
+
+def returnfields(request_type):
+    return list(_request_types()['Requests'][request_type]['Returnfields']['Content'].keys())
+
+def optionalfields(request_type):
+    return list(_request_types()['Requests'][request_type]['Optionalfields']['Content'].keys())
+
+# ── Data retrieval ───────────────────────────────────────────────────
+
+
+def _parse_timeseries(records: list[dict]) -> pd.DataFrame:
+    """Parse a getTimeseriesValues response into a DataFrame."""
+    dfs = []
+    for record in records:
+        df = pd.DataFrame(record['data'], columns=record['columns'].split(','))
+        # Attach metadata columns without mutating the original response
+        meta = {k: v for k, v in record.items() if k not in ('data', 'rows', 'columns')}
+        df = df.assign(**meta)
+        dfs.append(df)
+    return pd.concat(dfs, ignore_index=True)
+
+def _parse_table(records: list) -> pd.DataFrame:
+    """Parse a header-row + data-rows response (getStationList, getTimeseriesList, etc.)."""
+    return pd.DataFrame(records[1:], columns=records[0])
+
+def get(args_dict):
+    """Full request with field auto-fill from API introspection (mirrors old Service.get)."""
+    request_type = args_dict['request']
+    defaults = {f: None for f in queryfields(request_type) + optionalfields(request_type)}
+    return _get({**defaults, **args_dict})
+
+def get_df(args_dict):
+    """Fetch data and convert to a DataFrame."""
+    records = get(args_dict).json()
+    parser = _PARSERS.get(args_dict['request'], _parse_table)
+    return parser(records)
+    
+_PARSERS = {
+    'getTimeseriesValues': _parse_timeseries,
+    # Everything else uses the table format — add exceptions here as needed
+}
+
 
 def construct_aggregation(interval, aggregation_type):
     validate_interval(interval)
@@ -221,13 +163,6 @@ def validate_custom_interval(interval:str):
     assert(0 <= int(interval[2:4]) < 60)  # minutes
     assert(0 <= int(interval[4:6]) < 60)  # seconds
     return True
-
-
-def test_connection():
-    return SERVICE.test_connection()
-
-def get(args_dict):
-    return SERVICE.get(args_dict)
 
 def get_ts(
             ts_id,
@@ -265,9 +200,9 @@ def get_ts(
             'ca_sta_returnfields': ['stn_HUC12','stn_EQuIS_ID']}
     
     if as_json:
-        output = SERVICE.get_json(args)
+        output = get(args).json()
     else: 
-        output = SERVICE.get(args)
+        output = get_df(args)
     #print('Done!')
     return output
     
@@ -297,7 +232,7 @@ def get_stations(
             }
     
     
-    df = SERVICE.get(args)
+    df = get_df(args)
     if huc_id is not None: df = df.loc[df['stn_HUC12'].str.startswith(huc_id)]
     return df
 
@@ -330,7 +265,7 @@ def get_ts_ids(
             'returnfields': returnfields,
             'ca_sta_returnfields': ['stn_HUC12','stn_EQuIS_ID','stn_AUID']}
     
-    df = SERVICE.get(args)
+    df = get_df(args)
     return df
     
 
@@ -349,7 +284,7 @@ def get_wplmn(station_nos):
                     '5045':'TKN Conc',
                     '262' :'Flow'}
         
-    ts_ids = self.get_ts_ids(station_nos = station_nos,
+    ts_ids = get_ts_ids(station_nos = station_nos,
                         stationgroup_id = '1319204',
                         stationparameter_no = list(PARAMETERS_MAP.keys()),
                         ts_name = ['20.Day.Mean'])
@@ -360,7 +295,7 @@ def get_wplmn(station_nos):
     
     dfs = []
     for ts_id in ts_ids['ts_id']:
-        dfs.append(self.get_ts(ts_id))
+        dfs.append(get_ts(ts_id))
         time.sleep(1)
     
     return pd.concat(dfs)
