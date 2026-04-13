@@ -2,7 +2,7 @@
 
 Modules for downloading hydrology data from MPCA servers and databases.
 
-Please note I am creating this package to be usefule for my work needs but also learn and practice programming...
+Please note I am creating and maintaining this package to learn and practice programming.
 
 ---
 
