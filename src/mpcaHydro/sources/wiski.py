@@ -56,7 +56,7 @@ Key data structures
 """
 
 import pandas as pd
-from mpcaHydro import pywisk
+from mpcaHydro.sources import pywisk
 import baseflow as bf
 import time
 
