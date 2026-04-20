@@ -249,27 +249,19 @@ def download_wiski_data(
         Algorithm for baseflow separation.
     overwrite : bool, default True
         Drop existing data for these stations before inserting.
-    """    
-
+    """
     df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
-    if not df.empty:
-
-        if data_dir is not None:
-            for sid in df['station_no'].unique():
-                df_station = df[df['station_no'] == sid]
-                storage.save_staging(df_station, data_dir, 'wiski', sid)
-
-
-        # df_transformed = wiski.transform(df.copy(), filter_qc_codes, data_codes, baseflow_method)
-        # # Drop existing data for these stations if overwrite is True
-        # if overwrite:
-        #     warehouse.drop_station_data(con, station_ids, 'wiski')
-        # warehouse.add_df_to_table(con, df, 'staging', 'wiski')
-        # if not df_transformed.empty:
-        #     warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
-        # warehouse.update_views(con)
-    else:
+    if df.empty:
         print('No data necessary for HSPF calibration from wiski for:', station_ids)
+        return
+
+    if data_dir is not None:
+        data_dir = Path(data_dir)
+        for sid in df['station_no'].unique():
+            storage.save_staging(df[df['station_no'] == sid], data_dir, 'wiski', sid)
+        # Rebind staging views so new files are immediately queryable.
+        warehouse.refresh_staging_views(con, data_dir)
+        warehouse.update_views(con)
 
 
 def download_equis_data(
@@ -304,26 +296,21 @@ def download_equis_data(
         Oracle database password.
     overwrite : bool, default True
         Drop existing data for these stations before inserting.
-    """    
+    """
     with equis.connect(user=oracle_username, password=oracle_password) as oracle_conn:
         print('Connected to Oracle database.')
         df = equis.download(station_ids, connection=oracle_conn)
-    if not df.empty:
-        if data_dir is not None:
-            for sid in df['station_no'].unique():
-                df_station = df[df['station_no'] == sid]
-                storage.save_staging(df_station, data_dir, 'equis', sid)
-
-
-        # df_transformed = equis.transform(df.copy())
-        # # Drop existing data for these stations if overwrite is True
-        # if overwrite:
-        #     warehouse.drop_station_data(con, station_ids, 'equis')
-        # warehouse.add_df_to_table(con, df, 'staging', 'equis')
-        # warehouse.add_df_to_table(con, df_transformed, 'analytics', 'equis')
-        # warehouse.update_views(con)
-    else:
+    if df.empty:
         print('No data necessary for HSPF calibration from equis for:', station_ids)
+        return
+
+    if data_dir is not None:
+        data_dir = Path(data_dir)
+        for sid in df['SYS_LOC_CODE'].unique():
+            storage.save_staging(df[df['SYS_LOC_CODE'] == sid], data_dir, 'equis', sid)
+        # Rebind staging views so new files are immediately queryable.
+        warehouse.refresh_staging_views(con, data_dir)
+        warehouse.update_views(con)
     
 
 def get_outlets(con: duckdb.DuckDBPyConnection, model_name: str) -> pd.DataFrame:
@@ -817,24 +804,39 @@ class DataManagerWrapper:
     Parameters
     ----------
     db_path : str or Path
-        Path to the DuckDB warehouse file.
+        Path to the DuckDB warehouse file.  Pass ``None`` when using
+        parquet-mode (``data_dir`` is provided instead).
     reset : bool, default False
         If ``True``, re-initialise the database (delete and recreate).
+        Ignored when *data_dir* is provided.
+    data_dir : str or Path, optional
+        Root directory for the parquet-based workflow.  When provided the
+        connection is created via :func:`~warehouse.create_session` and
+        *db_path* is ignored.
 
     Attributes
     ----------
-    db_path : pathlib.Path
-        Resolved path to the DuckDB file.
+    db_path : pathlib.Path or None
+        Resolved path to the DuckDB file, or ``None`` in parquet mode.
+    data_dir : pathlib.Path or None
+        Resolved data directory in parquet mode, or ``None`` in DB mode.
 
     Examples
     --------
-    >>> dm = DataManagerWrapper('observations.duckdb', reset=True)
+    Parquet mode (recommended):
+
+    >>> dm = DataManagerWrapper(db_path=None, data_dir='data')
     >>> dm.download_wiski_data(['E66050001'])
     >>> df = dm.get_observation_data(['E66050001'], 'Q', agg_period='D')
+
+    File-DB mode:
+
+    >>> dm = DataManagerWrapper('observations.duckdb', reset=True)
+    >>> dm.download_wiski_data(['E66050001'])
     """
-    
+
     def __init__(self, db_path: Union[str, Path], reset: bool = False, data_dir: Optional[Union[str, Path]] = None):
-        """Initialise the wrapper with a database path.
+        """Initialise the wrapper.
 
         Parameters
         ----------
@@ -842,10 +844,12 @@ class DataManagerWrapper:
             Path to the DuckDB warehouse file.
         reset : bool, default False
             Re-initialise the database when ``True``.
+        data_dir : str or Path, optional
+            Root data directory for parquet mode.
         """
         data_dir = Path(data_dir) if data_dir is not None else None
         db_path = Path(db_path) if db_path is not None else None
-        
+
         if data_dir is not None:
             self.con = warehouse.create_session(data_dir.as_posix())
             self.data_dir = Path(data_dir)
@@ -927,7 +931,7 @@ class DataManagerWrapper:
 
         See :func:`process_wiski_data` for details.
         """
-        self.process_wiski_data(self.con, filter_qc_codes, data_codes, baseflow_method)
+        process_wiski_data(self.con, filter_qc_codes, data_codes, baseflow_method)
 
     def process_equis_data(self) -> None:
         """Process EQuIS data from staging to analytics.

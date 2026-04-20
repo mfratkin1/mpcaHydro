@@ -81,8 +81,6 @@ def download_wiski_data(
     wplmn: bool = False
 ) -> None:
     """Download WISKI data for the given stations and save to staging, deduplicating against existing data."""
-    
-    keys = NATURAL_KEYS['wiski']
     for station_id in station_ids:
         df_new = wiski.download([station_id], start_year=start_year, end_year=end_year, wplmn=wplmn)
 
@@ -90,78 +88,33 @@ def download_wiski_data(
             print(f"No data for {station_id}")
             continue
 
-        # Load what we already have for this station
-        existing_path = staging_path(data_dir, 'wiski', station_id)
-
-        if existing_path.exists():
-            df_existing = pd.read_parquet(existing_path)
-
-            merged = df_new.merge(
-                df_existing[keys],
-                on=keys,
-                how='left',
-                indicator=True
-            )
-            df_new = merged[merged['_merge'] == 'left_only'].drop(columns='_merge')
-
-            if df_new.empty:
-                print(f"{station_id}: no new data")
-                continue
-
-            # Append new rows to existing
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+        _, new_count = save_staging(df_new, data_dir, 'wiski', station_id)
+        if new_count > 0:
+            total = len(pd.read_parquet(staging_path(data_dir, 'wiski', station_id)))
+            print(f"{station_id}: added {new_count} new rows ({total} total)")
         else:
-            df_combined = df_new
-
-        df_combined.to_parquet(existing_path, index=False)
-        print(f"{station_id}: added {len(df_new)} new rows ({len(df_combined)} total)")
+            print(f"{station_id}: no new data")
 
 
-        
 def download_equis_data(
     station_ids: List[str],
-    start_year: int = 1996,
-    end_year: int = 2030,
     data_dir: Path = DEFAULT_DATA_DIR,
-    wplmn: bool = False
 ) -> None:
     """Download EQUIS data for the given stations and save to staging, deduplicating against existing data."""
-    
-    keys = NATURAL_KEYS['equis']
     df_equis = equis.download(station_ids)
 
     if df_equis.empty:
         print("No data downloaded")
+        return
 
-    else:
-        for station_id in df_equis['SYS_LOC_CODE'].unique():
-            df_new = df_equis[df_equis['SYS_LOC_CODE'] == station_id]
-            
-            # Load what we already have for this station
-            existing_path = staging_path(data_dir, 'equis', station_id)
-
-            if existing_path.exists():
-                df_existing = pd.read_parquet(existing_path)
-
-                merged = df_new.merge(
-                    df_existing[keys],
-                    on=keys,
-                    how='left',
-                    indicator=True
-                )
-                df_new = merged[merged['_merge'] == 'left_only'].drop(columns='_merge')
-
-                if df_new.empty:
-                    print(f"{station_id}: no new data")
-                    continue
-
-                # Append new rows to existing
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-            else:
-                df_combined = df_new
-
-            df_combined.to_parquet(existing_path, index=False)
-            print(f"{station_id}: added {len(df_new)} new rows ({len(df_combined)} total)")
+    for station_id in df_equis['SYS_LOC_CODE'].unique():
+        df_new = df_equis[df_equis['SYS_LOC_CODE'] == station_id]
+        _, new_count = save_staging(df_new, data_dir, 'equis', station_id)
+        if new_count > 0:
+            total = len(pd.read_parquet(staging_path(data_dir, 'equis', station_id)))
+            print(f"{station_id}: added {new_count} new rows ({total} total)")
+        else:
+            print(f"{station_id}: no new data")
 
 
 
