@@ -234,7 +234,7 @@ def refresh_staging_views(con: duckdb.DuckDBPyConnection, data_dir: str) -> None
     data_dir = Path(data_dir)
     for source in ("wiski", "equis"):
         source_path = data_dir / "staging" / source
-        if not any(source_path.glob("*.parquet")):
+        if next(source_path.glob("*.parquet"), None) is None:
             continue  # no files yet — keep empty table
 
         # Check whether staging.{source} is currently a base table.
