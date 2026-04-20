@@ -192,8 +192,6 @@ def create_session(data_dir: str = "data",
         """)
 
     # These all resolve — either against parquet views or empty tables
-    con.execute(sql_loader.get_transforms_wiski_sql())
-    con.execute(sql_loader.get_transforms_equis_sql())
     update_views(con)
 
     return con
@@ -516,6 +514,8 @@ def update_views(con: duckdb.DuckDBPyConnection):
     con : duckdb.DuckDBPyConnection
         Writable DuckDB connection.
     """
+    con.execute(sql_loader.get_transforms_wiski_sql())
+    con.execute(sql_loader.get_transforms_equis_sql())
     con.execute(sql_loader.get_views_analytics_sql())
     con.execute(sql_loader.get_views_reports_sql())
     

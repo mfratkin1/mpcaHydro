@@ -58,12 +58,12 @@ nondetects_replaced AS (
         unit, station_origin
     FROM columns_normalized
 ),
-
-year_filtered AS (
-    -- Step 6: filter_years
-    SELECT * FROM nondetects_replaced
-    WHERE year(datetime) >= getvariable('min_year')
-),
+    
+-- year_filtered AS (
+--     -- Step 6: filter_years
+--     SELECT * FROM nondetects_replaced
+--     WHERE year(datetime) >= getvariable('min_year')
+-- ),
 
 hourly_averaged AS (
     -- Step 7: average_results
@@ -72,8 +72,8 @@ hourly_averaged AS (
         DATE_TRUNC('hour', datetime + INTERVAL '30 minute') AS datetime,
         AVG(value) AS value,
         unit, station_origin
-    FROM year_filtered
+    FROM nondetects_replaced
     GROUP BY station_id, constituent, datetime, unit, station_origin
-)
+)              
 
 SELECT * FROM hourly_averaged;

@@ -20,16 +20,15 @@ normalized AS (
     SELECT
         station_no AS station_id,
         m.constituent,
-        Timestamp AS datetime,
+        "Timestamp" AS datetime,
         converted_value AS value,
         unit,
-        'Quality Code' AS quality_code,
+        "Quality Code" AS quality_code,
         'wiski' AS station_origin
     FROM unit_converted u
     JOIN mappings.wiski_parametertype m
         ON u.parametertype_id = m.parametertype_id
 ),
-
 
 quality_filtered AS (
     SELECT 
@@ -40,11 +39,12 @@ quality_filtered AS (
     WHERE wqc.active = 1
 ),
 
-year_filtered AS (
-    SELECT *
-    FROM quality_filtered
-    WHERE year(datetime) >= getvariable('min_year')
-),
+
+--year_filtered AS (
+--    SELECT *
+--    FROM quality_filtered
+--    WHERE year(datetime) >= getvariable('min_year')
+--),
 
 hourly_averaged AS (
     SELECT
@@ -52,7 +52,7 @@ hourly_averaged AS (
         DATE_TRUNC('hour', datetime + INTERVAL '30 minute') AS datetime,
         AVG(value) AS value,
         unit, station_origin
-    FROM year_filtered
+    FROM quality_filtered
     GROUP BY station_id, constituent, datetime, unit, station_origin
 )
 
