@@ -417,18 +417,27 @@ def download_chunk(ts_id, start_year=1996, end_year=2030, interval=2, as_json=Fa
     pandas.DataFrame
         Concatenated time-series values across all windows.
     """
-    frames = [pd.DataFrame()]
+    frames = []
+    for start in range(start_year, end_year + 1, interval):  # +1 to include end_year
+        end = min(start + interval - 1, end_year)
+        df = pywisk.get_ts(
+            ts_id,
+            start_date=f'{start}-01-01',
+            end_date=f'{end}-12-31',
+            as_json=as_json,
+        )
+        if not df.empty:
+            df['Timestamp'] = pd.to_datetime(df['Timestamp']).dt.tz_localize(None)
+            frames.append(df)
+        time.sleep(0.1)
 
-    for start in range(start_year,end_year,interval):
-        end = int(start + interval-1)
-        if end > end_year:
-            end = end_year
-        df = pywisk.get_ts(ts_id,start_date = f'{start}-01-01',end_date = f'{end}-12-31',as_json = as_json)
-        if not df.empty: frames.append(df)
-        df['Timestamp'] = pd.to_datetime(df['Timestamp']).dt.tz_localize(None)
-        time.sleep(.1)   
-    return pd.concat(frames)
+    if not frames:
+        df = pd.DataFrame()
+    else:
+        df = pd.concat(frames, ignore_index=True)
 
+    return df
+    
 def convert_to_df(ts_ids, start_year=1996, end_year=2030):
     """Download and concatenate data for multiple time-series IDs.
 
@@ -452,18 +461,19 @@ def convert_to_df(ts_ids, start_year=1996, end_year=2030):
     """
     dfs = []
     for ts_id in ts_ids:
-        ts_info = pywisk.get_ts_ids(ts_ids = ts_id)[['from','to']]
-        
-        # Subset start and end years based on available data if possible.
-        if not ts_info['from'].iloc[0] == '':
-            start_year = ts_info['from'].str[0:4].astype(int).iloc[0]
-        if not ts_info['to'].iloc[0] == '':
-            end_year = ts_info['to'].str[0:4].astype(int).iloc[0]
-        
-        dfs.append(download_chunk(ts_id,start_year,end_year))
-        time.sleep(.1)
-    df =  pd.concat(dfs)
-    return df
+        ts_info = pywisk.get_ts_ids(ts_ids=ts_id)[['from', 'to']]
+
+        # Scope date narrowing to this TS ID only
+        ts_start = start_year
+        ts_end = end_year
+        if ts_info['from'].iloc[0] != '':
+            ts_start = int(ts_info['from'].iloc[0][:4])
+        if ts_info['to'].iloc[0] != '':
+            ts_end = int(ts_info['to'].iloc[0][:4])
+
+        dfs.append(download_chunk(ts_id, ts_start, ts_end))
+        time.sleep(0.1)
+    return pd.concat(dfs)
 
 
 def discharge(station_nos, start_year=1996, end_year=2030):
@@ -811,7 +821,7 @@ def calculate_baseflow(df, method='Boughton'):
     dfs = [df]
     for station_id in df['station_id'].unique():
         df_station = df.query(f'constituent == "Q" & station_id == "{station_id}"')[['datetime', 'value']].copy().set_index('datetime')
-        if df_station.empty:
+        if df_station.empty | len(df_station) < 10:  # baseflow separation requires a minimum number of observations
             continue
         else:
             df_baseflow = bf.single(df_station['value'], area = None, method = method,return_kge = False)[0][method]
@@ -854,7 +864,7 @@ def normalize(df):
     df = normalize_columns(df)
     return df
 
-def transform(df, filter_qc_codes=True, data_codes=None, baseflow_method='Boughton'):
+def transform(df, filter_qc_codes=True, data_codes=None, baseflow_method='Boughton', include_baseflow = True):
     """Full ETL pipeline: normalise → filter → average → baseflow.
 
     This is the recommended entry point for preparing WISKI data for
@@ -881,6 +891,8 @@ def transform(df, filter_qc_codes=True, data_codes=None, baseflow_method='Bought
         Custom quality-code whitelist.  Defaults to :data:`DATA_CODES`.
     baseflow_method : str, default ``'Boughton'``
         Algorithm name for baseflow separation.
+    include_baseflow : bool, default True
+        Whether to include baseflow (``QB``) in the output.
 
     Returns
     -------
@@ -895,7 +907,8 @@ def transform(df, filter_qc_codes=True, data_codes=None, baseflow_method='Bought
         df = filter_quality_codes(df, data_codes)
     df = average_results(df)
     df = filter_years(df, start_year=1996)
-    df = calculate_baseflow(df, method = baseflow_method)
+    if include_baseflow:
+        df = calculate_baseflow(df, method = baseflow_method)
     df['station_origin'] = 'wiski'
     #df.set_index('datetime',inplace=True)
     return df
