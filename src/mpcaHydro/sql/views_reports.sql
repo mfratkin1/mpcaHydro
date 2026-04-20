@@ -14,7 +14,7 @@ CREATE OR REPLACE VIEW reports.wiski_qc_count AS (
     FROM staging.wiski w 
     LEFT JOIN mappings.wiski_quality_codes wqc
         ON w."Quality Code" = wqc.quality_code
-    WHERE wqc.Active = 1
+    --WHERE wqc.Active = 1
     GROUP BY
         w."Quality Code", wqc."Text", wqc.Description, w.parametertype_name, w.station_no
 );

@@ -58,7 +58,7 @@ from typing import List, Optional, Union
 import duckdb
 import pandas as pd
 
-from mpcaHydro import equis, warehouse, wiski
+from mpcaHydro import equis, storage, warehouse, wiski
 
 AGG_DEFAULTS = {
     'cfs': 'mean',
@@ -216,7 +216,8 @@ def download_wiski_data(
     filter_qc_codes: bool = True,
     data_codes: Optional[List[int]] = None,
     baseflow_method: str = 'Boughton',
-    overwrite: bool = True
+    overwrite: bool = True,
+    data_dir: Optional[Union[str, Path]] = None
 ) -> None:
     """Download WISKI data, transform it, and load both raw and analytics.
 
@@ -252,14 +253,21 @@ def download_wiski_data(
 
     df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
     if not df.empty:
-        df_transformed = wiski.transform(df.copy(), filter_qc_codes, data_codes, baseflow_method)
-        # Drop existing data for these stations if overwrite is True
-        if overwrite:
-            warehouse.drop_station_data(con, station_ids, 'wiski')
-        warehouse.add_df_to_table(con, df, 'staging', 'wiski')
-        if not df_transformed.empty:
-            warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
-        warehouse.update_views(con)
+
+        if data_dir is not None:
+            for sid in df['station_no'].unique():
+                df_station = df[df['station_no'] == sid]
+                storage.save_staging(df_station, data_dir, 'wiski', sid)
+
+
+        # df_transformed = wiski.transform(df.copy(), filter_qc_codes, data_codes, baseflow_method)
+        # # Drop existing data for these stations if overwrite is True
+        # if overwrite:
+        #     warehouse.drop_station_data(con, station_ids, 'wiski')
+        # warehouse.add_df_to_table(con, df, 'staging', 'wiski')
+        # if not df_transformed.empty:
+        #     warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
+        # warehouse.update_views(con)
     else:
         print('No data necessary for HSPF calibration from wiski for:', station_ids)
 
@@ -269,7 +277,8 @@ def download_equis_data(
     station_ids: List[str],
     oracle_username: str,
     oracle_password: str,
-    overwrite: bool = True
+    overwrite: bool = True,
+    data_dir: Optional[Union[str, Path]] = None
 ) -> None:
     """Download EQuIS data, transform it, and load both raw and analytics.
 
@@ -300,13 +309,19 @@ def download_equis_data(
         print('Connected to Oracle database.')
         df = equis.download(station_ids, connection=oracle_conn)
     if not df.empty:
-        df_transformed = equis.transform(df.copy())
-        # Drop existing data for these stations if overwrite is True
-        if overwrite:
-            warehouse.drop_station_data(con, station_ids, 'equis')
-        warehouse.add_df_to_table(con, df, 'staging', 'equis')
-        warehouse.add_df_to_table(con, df_transformed, 'analytics', 'equis')
-        warehouse.update_views(con)
+        if data_dir is not None:
+            for sid in df['station_no'].unique():
+                df_station = df[df['station_no'] == sid]
+                storage.save_staging(df_station, data_dir, 'equis', sid)
+
+
+        # df_transformed = equis.transform(df.copy())
+        # # Drop existing data for these stations if overwrite is True
+        # if overwrite:
+        #     warehouse.drop_station_data(con, station_ids, 'equis')
+        # warehouse.add_df_to_table(con, df, 'staging', 'equis')
+        # warehouse.add_df_to_table(con, df_transformed, 'analytics', 'equis')
+        # warehouse.update_views(con)
     else:
         print('No data necessary for HSPF calibration from equis for:', station_ids)
     
@@ -536,12 +551,12 @@ def get_raw_data(
     if station_origin.lower() == 'equis':
         query = '''
         SELECT *
-        FROM staging.equis_raw
+        FROM staging.equis
         WHERE station_id = ?'''
     elif station_origin.lower() == 'wiski':
         query = '''
         SELECT *
-        FROM staging.wiski_raw
+        FROM staging.wiski
         WHERE station_id = ?'''
     else:
         raise ValueError(f'Station origin {station_origin} not recognized.')
@@ -818,7 +833,7 @@ class DataManagerWrapper:
     >>> df = dm.get_observation_data(['E66050001'], 'Q', agg_period='D')
     """
     
-    def __init__(self, db_path: Union[str, Path], reset: bool = False):
+    def __init__(self, db_path: Union[str, Path], reset: bool = False, data_dir: Optional[Union[str, Path]] = None):
         """Initialise the wrapper with a database path.
 
         Parameters
@@ -828,10 +843,20 @@ class DataManagerWrapper:
         reset : bool, default False
             Re-initialise the database when ``True``.
         """
-        self.db_path = Path(db_path)
-        if reset:
-            self._init_warehouse(reset=True)
-    
+        data_dir = Path(data_dir) if data_dir is not None else None
+        db_path = Path(db_path) if db_path is not None else None
+        
+        if data_dir is not None:
+            self.con = warehouse.create_session(data_dir.as_posix())
+            self.data_dir = Path(data_dir)
+            self.db_path = None
+        else:
+            self.db_path = Path(db_path)
+            if reset:
+                self._init_warehouse(reset=True)
+            self.con = self._connect(read_only=False)
+            self.data_dir = None
+
     def _init_warehouse(self, reset: bool = False) -> None:
         """Initialise the underlying data warehouse database.
 
@@ -858,40 +883,38 @@ class DataManagerWrapper:
     
     def update_views(self) -> None:
         """Refresh all analytics and reports views."""
-        with self._connect(read_only=False) as con:
-            update_views(con)
+        update_views(self.con)
     
     def wiski_qc_counts(self):
         """Return WISKI quality-code frequency counts.
 
         See :func:`wiski_qc_counts` for details.
         """
-        with self._connect(read_only=True) as con:
-            return wiski_qc_counts(con)
+        return wiski_qc_counts(self.con)
+
         
     def station_summary(self, constituent: str = None):
         """Return per-station constituent summary statistics.
 
         See :func:`station_summary` for details.
         """
-        with self._connect(read_only=True) as con:
-            return station_summary(con,constituent)
+        return station_summary(self.con, constituent)
         
     def station_reach_pairs(self):
         """Return all station-reach pair records.
 
         See :func:`station_reach_pairs` for details.
         """
-        with self._connect(read_only=True) as con:
-            return station_reach_pairs(con)
+        return station_reach_pairs(self.con)
+
         
     def outlet_summary(self):
         """Return outlet-level constituent summary.
 
         See :func:`outlet_summary` for details.
         """
-        with self._connect(read_only=True) as con:
-            return outlet_summary(con)
+        return outlet_summary(self.con)
+    
     
     
     def process_wiski_data(
@@ -904,16 +927,14 @@ class DataManagerWrapper:
 
         See :func:`process_wiski_data` for details.
         """
-        with self._connect(read_only=False) as con:
-            process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
-    
+        self.process_wiski_data(self.con, filter_qc_codes, data_codes, baseflow_method)
+
     def process_equis_data(self) -> None:
         """Process EQuIS data from staging to analytics.
 
         See :func:`process_equis_data` for details.
         """
-        with self._connect(read_only=False) as con:
-            process_equis_data(con)
+        process_equis_data(self.con)
     
     def process_all_data(
         self,
@@ -925,8 +946,7 @@ class DataManagerWrapper:
 
         See :func:`process_all_data` for details.
         """
-        with self._connect(read_only=False) as con:
-            process_all_data(con, filter_qc_codes, data_codes, baseflow_method)
+        process_all_data(self.con, filter_qc_codes, data_codes, baseflow_method)
     
     def download_wiski_data(
         self,
@@ -942,11 +962,10 @@ class DataManagerWrapper:
 
         See :func:`download_wiski_data` for details.
         """
-        with self._connect(read_only=False) as con:
-            download_wiski_data(
-                con, station_ids, start_year, end_year,
-                filter_qc_codes, data_codes, baseflow_method, replace
-            )
+        download_wiski_data(
+            self.con, station_ids, start_year, end_year,
+            filter_qc_codes, data_codes, baseflow_method, replace, self.data_dir
+        )
     
     def download_equis_data(
         self,
@@ -959,24 +978,21 @@ class DataManagerWrapper:
 
         See :func:`download_equis_data` for details.
         """
-        with self._connect(read_only=False) as con:
-            download_equis_data(con, station_ids, oracle_username, oracle_password, replace)
+        download_equis_data(self.con, station_ids, oracle_username, oracle_password, replace, self.data_dir)
     
     def get_outlets(self, model_name: str) -> pd.DataFrame:
         """Get outlet station-reach pairs for a model.
 
         See :func:`get_outlets` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_outlets(con, model_name)
+        return get_outlets(self.con, model_name)
     
     def get_station_ids(self, station_origin: Optional[str] = None) -> List[str]:
         """Get station IDs, optionally filtered by origin.
 
         See :func:`get_station_ids` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_station_ids(con, station_origin)
+        return get_station_ids(self.con, station_origin)
     
     def get_observation_data(
         self,
@@ -988,8 +1004,7 @@ class DataManagerWrapper:
 
         See :func:`get_observation_data` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_observation_data(con, station_ids, constituent, agg_period)
+        return get_observation_data(self.con, station_ids, constituent, agg_period)
     
     def get_outlet_data(
         self,
@@ -1001,32 +1016,28 @@ class DataManagerWrapper:
 
         See :func:`get_outlet_data` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_outlet_data(con, outlet_id, constituent, agg_period)
+        return get_outlet_data(self.con, outlet_id, constituent, agg_period)
     
     def get_station_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
         """Get all analytics observations for a station.
 
         See :func:`get_station_data` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_station_data(con, station_id, station_origin)
+        return get_station_data(self.con, station_id, station_origin)
     
     def get_raw_data(self, station_id: str, station_origin: str) -> pd.DataFrame:
         """Get raw staging data for a station.
 
         See :func:`get_raw_data` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_raw_data(con, station_id, station_origin)
+        return get_raw_data(self.con, station_id, station_origin)
     
     def get_constituent_summary(self) -> pd.DataFrame:
         """Get constituent summary across all stations.
 
         See :func:`get_constituent_summary` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_constituent_summary(con)
+        return get_constituent_summary(self.con)
     
     def export_station_to_csv(
         self,
@@ -1038,8 +1049,7 @@ class DataManagerWrapper:
 
         See :func:`export_station_to_csv` for details.
         """
-        with self._connect(read_only=True) as con:
-            export_station_to_csv(con, station_id, station_origin, output_path)
+        export_station_to_csv(self.con, station_id, station_origin, output_path)
     
     def export_raw_to_csv(
         self,
@@ -1051,21 +1061,18 @@ class DataManagerWrapper:
 
         See :func:`export_raw_to_csv` for details.
         """
-        with self._connect(read_only=True) as con:
-            export_raw_to_csv(con, station_id, station_origin, output_path)
+        export_raw_to_csv(self.con, station_id, station_origin, output_path)
     
     def get_equis_template(self) -> pd.DataFrame:
         """Get an empty DataFrame matching the ``staging.equis`` schema.
 
         See :func:`get_equis_template` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_equis_template(con)
+        return get_equis_template(self.con)
     
     def get_wiski_template(self) -> pd.DataFrame:
         """Get an empty DataFrame matching the ``staging.wiski`` schema.
 
         See :func:`get_wiski_template` for details.
         """
-        with self._connect(read_only=True) as con:
-            return get_wiski_template(con)
+        return get_wiski_template(self.con)

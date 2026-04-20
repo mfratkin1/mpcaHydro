@@ -54,3 +54,11 @@ def get_views_outlets_sql() -> str:
 def get_calibration_schema_sql() -> str:
     """Load SQL for creating calibration schema (SQLite)."""
     return load_sql('calibration_schema.sql')
+
+def get_transforms_wiski_sql() -> str:
+    """Load SQL for transforming WISKI data."""
+    return load_sql('transforms_wiski.sql')
+
+def get_transforms_equis_sql() -> str:
+    """Load SQL for transforming EQUIS data."""
+    return load_sql('transforms_equis.sql')

@@ -63,6 +63,8 @@ from mpcaHydro.sql_loader import get_outlets_schema_sql
 #from hspf_tools.calibrator import etlWISKI, etlSWD
 
 
+
+
 #stations_wiski = gpd.read_file('C:/Users/mfratki/Documents/GitHub/pyhcal/src/pyhcal/data/stations_wiski.gpkg')
 def _construct_MODL_DB(stations_wiski, stations_equis):
     MODL_DB = pd.concat([stations_wiski,stations_equis])
@@ -633,6 +635,56 @@ def build_outlet_db(db_path: str = None):
 
 
 def build_outlets(con, model_name: str = None):
+    """Populate outlet tables from MODL_DB — bulk insert, no loops."""
+    if model_name is not None:
+        modl_db = get_model_db(model_name)
+    else:
+        modl_db = MODL_DB
+
+    # ── outlet_groups: one row per unique outlet ──
+    df_groups = (
+        modl_db[['outlet_id', 'repo_name']]
+        .drop_duplicates('outlet_id')
+        .rename(columns={'repo_name': 'repository_name'})
+        .assign(outlet_name=None, notes=None)
+    )
+    con.execute("""
+        INSERT INTO outlets.outlet_groups (outlet_id, repository_name, outlet_name, notes)
+        SELECT outlet_id, repository_name, outlet_name, notes FROM df_groups
+    """)
+
+    # ── outlet_stations: one row per unique station+source ──
+    df_stations = (
+        modl_db
+        .drop_duplicates(subset=['station_id', 'source'])
+        [['outlet_id', 'station_id', 'source', 'true_opnid', 'repo_name', 'comments']]
+        .rename(columns={'source': 'station_origin', 'repo_name': 'repository_name'})
+    )
+    con.execute("""
+        INSERT INTO outlets.outlet_stations 
+            (outlet_id, station_id, station_origin, true_opnid, repository_name, comments)
+        SELECT outlet_id, station_id, station_origin, true_opnid, repository_name, comments
+        FROM df_stations
+    """)
+
+    # ── outlet_reaches: explode comma-separated opnids, one row per reach ──
+    df_reaches = (
+        modl_db[['outlet_id', 'opnids', 'repo_name']]
+        .dropna(subset=['opnids'])
+        .assign(reach_id=lambda d: d['opnids'].str.split(','))
+        .explode('reach_id')
+        .assign(reach_id=lambda d: d['reach_id'].str.strip().astype(float).astype(int))
+        .drop_duplicates(subset=['outlet_id', 'reach_id'])
+        [['outlet_id', 'reach_id', 'repo_name']]
+        .rename(columns={'repo_name': 'repository_name'})
+    )
+    con.execute("""
+        INSERT INTO outlets.outlet_reaches (outlet_id, reach_id, repository_name)
+        SELECT outlet_id, reach_id, repository_name FROM df_reaches
+    """)
+
+
+def build_outlets_legacy(con, model_name: str = None):
     """Populate the outlet tables from :data:`MODL_DB`.
 
     For each outlet group, inserts rows into ``outlet_groups``,

@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS staging.equis(
 );
 
 CREATE TABLE IF NOT EXISTS staging.wiski(
-    "Timestamp" VARCHAR,
+    "Timestamp" DATETIME,
     "Value" DOUBLE,
     "Quality Code" BIGINT,
     "Quality Code Name" VARCHAR,

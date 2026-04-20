@@ -158,6 +158,46 @@ from pathlib import Path
 from mpcaHydro import outlets
 from mpcaHydro import sql_loader
 
+
+def create_session(data_dir: str = "data",
+                   wiski_quality_codes: List[int] = None,
+                   min_year: int = 1996) -> duckdb.DuckDBPyConnection:
+    
+    con = duckdb.connect()
+
+    create_schemas(con)
+    # Create tables
+    create_outlets_tables(con)
+    create_mapping_tables(con)
+
+
+    # Create empty staging tables first — guarantees the names exist
+    create_staging_tables(con)
+
+    equis_path = Path(f"{data_dir}/staging/equis")
+    wiski_path = Path(f"{data_dir}/staging/wiski")
+
+    # If parquet files exist, replace the empty tables with views over them
+    if list(equis_path.rglob("*.parquet")):
+        con.execute("DROP TABLE staging.equis")
+        con.execute(f"""
+            CREATE VIEW staging.equis AS 
+            SELECT * FROM read_parquet('{data_dir}/staging/equis/*.parquet', union_by_name=true);
+        """)
+    if list(wiski_path.rglob("*.parquet")):
+        con.execute("DROP TABLE staging.wiski")
+        con.execute(f"""    
+            CREATE VIEW staging.wiski AS 
+            SELECT * FROM read_parquet('{data_dir}/staging/wiski/*.parquet', union_by_name=true);
+        """)
+
+    # These all resolve — either against parquet views or empty tables
+    con.execute(sql_loader.get_transforms_wiski_sql())
+    con.execute(sql_loader.get_transforms_equis_sql())
+    update_views(con)
+
+    return con
+
 def init_db(db_path: str, reset: bool = False):
     """Initialise the DuckDB warehouse database.
 
@@ -341,6 +381,20 @@ def create_mapping_tables(con: duckdb.DuckDBPyConnection):
         print(f"Warning: WISKI_QUALITY_CODES.csv not found at {wiski_qc_csv_path}")
 
 
+def set_active_quality_codes(con, quality_codes: list):
+    """Update which quality codes are active in the current session.
+    
+    Since analytics.wiski is a VIEW, the next query against it
+    will automatically reflect the change. No reprocessing needed.
+    """
+    con.execute("UPDATE mappings.wiski_quality_codes SET active = 0")
+    if quality_codes:
+        placeholders = ', '.join(['?'] * len(quality_codes))
+        con.execute(
+            f"UPDATE mappings.wiski_quality_codes SET active = 1 WHERE quality_code IN ({placeholders})",
+            quality_codes
+        )
+
 def attach_outlets_db(con: duckdb.DuckDBPyConnection, outlets_db_path: str):
     """Attach and copy tables/views from an external outlet DuckDB file.
 
@@ -485,26 +539,30 @@ def connect(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     return duckdb.connect(database=db_path.as_posix(), read_only=read_only)
 
 
-def drop_station_data(con: duckdb.DuckDBPyConnection, station_ids: List[str], station_origin: str):
-    """Delete all data for specific stations from staging and analytics.
-
-    Removes matching rows from ``staging.equis``, ``staging.wiski``,
-    ``analytics.equis``, and ``analytics.wiski``, then refreshes views.
-
-    Parameters
-    ----------
-    con : duckdb.DuckDBPyConnection
-        Writable DuckDB connection.
-    station_ids : list of str
-        Station identifiers to remove.
-    station_origin : str
-        ``'wiski'`` or ``'equis'``.
-    """
+def drop_station_data(con, station_ids, station_origin):
     placeholders = ', '.join(['?'] * len(station_ids))
-    con.execute(f"DELETE FROM staging.equis WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
-    con.execute(f"DELETE FROM staging.wiski WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
-    con.execute(f"DELETE FROM analytics.equis WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
-    con.execute(f"DELETE FROM analytics.wiski WHERE station_id IN ({placeholders}) AND station_origin = ?", station_ids + [station_origin])
+
+    # Staging tables use source-native column names
+    if station_origin == 'wiski':
+        con.execute(
+            f"DELETE FROM staging.wiski WHERE station_no IN ({placeholders})",
+            station_ids,
+        )
+    elif station_origin == 'equis':
+        con.execute(
+            f"DELETE FROM staging.equis WHERE SYS_LOC_CODE IN ({placeholders})",
+            station_ids,
+        )
+
+    # Analytics tables use the unified schema
+    con.execute(
+        f"DELETE FROM analytics.equis WHERE station_id IN ({placeholders}) AND station_origin = ?",
+        station_ids + [station_origin],
+    )
+    con.execute(
+        f"DELETE FROM analytics.wiski WHERE station_id IN ({placeholders}) AND station_origin = ?",
+        station_ids + [station_origin],
+    )
     update_views(con)
 
 def get_column_names(con: duckdb.DuckDBPyConnection, table_schema: str, table_name: str) -> list:
@@ -733,47 +791,6 @@ def migrate_staging_to_analytics(con: duckdb.DuckDBPyConnection, staging_table: 
         SELECT * FROM staging.{staging_table}
     """)
 
-
-def load_to_analytics(con: duckdb.DuckDBPyConnection, table_name: str):
-    """Aggregate staging EQuIS data and load into an analytics table.
-
-    .. note::
-
-       This function contains a known issue — it references an undefined
-       variable ``df`` after the SQL execution.  Prefer
-       :func:`migrate_staging_to_analytics` or
-       :func:`load_df_to_analytics` for production use.
-
-    Parameters
-    ----------
-    con : duckdb.DuckDBPyConnection
-        Writable DuckDB connection.
-    table_name : str
-        Target analytics table name (without schema prefix).
-    """
-    con.execute(f"""
-                CREATE OR REPLACE TABLE analytics.{table_name} AS
-                SELECT
-                station_id,
-                constituent,
-                datetime,
-                value AS observed_value,
-                time_bucket(INTERVAL '1 hour', datetime) AS hour_start,
-                AVG(observed_value) AS value
-                FROM
-                    staging.equis_processed
-                GROUP BY
-                    hour_start,
-                    constituent,
-                    station_id
-                ORDER BY
-                    station_id,
-                    constituent
-                """)
-    # register pandas DF and create table
-    con.register("tmp_df", df)
-    con.execute(f"CREATE TABLE analytics.{table_name} AS SELECT * FROM tmp_df")
-    con.unregister("tmp_df")
 
 def dataframe_to_parquet(con: duckdb.DuckDBPyConnection, df: pd.DataFrame, path, compression="snappy"):
     """Write a DataFrame to a Parquet file using a temporary DuckDB connection.
