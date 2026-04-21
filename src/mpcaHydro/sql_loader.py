@@ -62,3 +62,11 @@ def get_transforms_wiski_sql() -> str:
 def get_transforms_equis_sql() -> str:
     """Load SQL for transforming EQUIS data."""
     return load_sql('transforms_equis.sql')
+
+def get_transforms_baseflow_sql() -> str:
+    """Load SQL for transforming baseflow data."""
+    return load_sql('transforms_baseflow.sql')
+
+def get_derived_tables_sql() -> str:
+    """Load SQL for creating derived tables (baseflow)."""
+    return load_sql('derived_tables.sql')

@@ -11,7 +11,29 @@ DEFAULT_DATA_DIR = Path("data")
 # Natural keys for each source — the columns that uniquely identify a record.
 # Used to filter out duplicates when appending new downloads.
 NATURAL_KEYS = {'wiski': ['ts_id', 'Timestamp'],
-                'equis': ['SYS_LOC_CODE', 'SAMPLE_DATE']}
+                'equis': ['SAMPLE_ID','TEST_ID','CAS_RN']}
+
+
+
+def validate_natural_keys(source: str, df: pd.DataFrame) -> None:
+    """Check that the expected natural key columns are present in the DataFrame."""
+    if source not in NATURAL_KEYS:
+        raise ValueError(f"Unknown source '{source}'. Known sources: {list(NATURAL_KEYS)}")
+    
+    missing_keys = [key for key in NATURAL_KEYS[source] if key not in df.columns]
+    if missing_keys:
+        raise ValueError(f"Missing natural key columns for source '{source}': {missing_keys}")
+    
+    # count of total rows vs unique rows based on natural keys
+    total_rows = len(df)
+    unique_rows = len(df.drop_duplicates(subset=NATURAL_KEYS[source]))
+    if total_rows != unique_rows:
+        raise ValueError(f"DataFrame for source '{source}' contains duplicate records based on natural keys. Total rows: {total_rows}, Unique rows: {unique_rows}")
+    
+    # check for nulls in natural key columns
+    for key in NATURAL_KEYS[source]:
+        if df[key].isnull().any():
+            raise ValueError(f"Natural key column '{key}' for source '{source}' contains null values, which may lead to incorrect deduplication.")
 
 
 def staging_dir(data_dir: Path, source: str) -> Path:

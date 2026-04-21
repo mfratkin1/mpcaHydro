@@ -59,6 +59,8 @@ import duckdb
 import pandas as pd
 
 from mpcaHydro import equis, storage, warehouse, wiski
+import baseflow
+
 
 AGG_DEFAULTS = {
     'cfs': 'mean',
@@ -79,47 +81,6 @@ UNIT_DEFAULTS = {
     'WL': 'ft'
 }
 
-
-def get_db_path(folderpath: Union[str, Path]) -> Path:
-    """Construct the default database file path for a project folder.
-
-    Parameters
-    ----------
-    folderpath : str or Path
-        Project directory.
-
-    Returns
-    -------
-    pathlib.Path
-        ``folderpath / 'observations.duckdb'``.
-    """
-    return Path(folderpath) / 'observations.duckdb'
-
-
-def init_warehouse(db_path: Union[str, Path], reset: bool = False) -> Path:
-    """Initialise the data warehouse database and return the path.
-
-    Delegates to :func:`warehouse.init_db` to create all schemas,
-    tables, mapping data, and views.
-
-    Parameters
-    ----------
-    db_path : str or Path
-        Path to the DuckDB file.
-    reset : bool, default False
-        Delete the existing file before creating a fresh database.
-
-    Returns
-    -------
-    pathlib.Path
-        The resolved database path.
-    """
-    from mpcaHydro import warehouse
-    db_path = Path(db_path)
-    warehouse.init_db(db_path.as_posix(), reset)
-    return db_path
-
-
 def update_views(con: duckdb.DuckDBPyConnection) -> None:
     """Refresh all analytics and reports views.
 
@@ -131,94 +92,13 @@ def update_views(con: duckdb.DuckDBPyConnection) -> None:
     from mpcaHydro import warehouse
     warehouse.update_views(con)
 
-
-def process_wiski_data(
-    con: duckdb.DuckDBPyConnection,
-    filter_qc_codes: bool = True,
-    data_codes: Optional[List[int]] = None,
-    baseflow_method: str = 'Boughton'
-) -> None:
-    """Read WISKI staging data, transform it, and load into analytics.
-
-    Reads all rows from ``staging.wiski``, applies :func:`wiski.transform`
-    (quality-code filtering, unit conversion, hourly averaging, and baseflow
-    separation), and writes the result to ``analytics.wiski``.
-
-    Parameters
-    ----------
-    con : duckdb.DuckDBPyConnection
-        Writable DuckDB connection.
-    filter_qc_codes : bool, default True
-        Apply quality-code filtering during transformation.
-    data_codes : list of int, optional
-        Custom quality-code whitelist (defaults to ``wiski.DATA_CODES``).
-    baseflow_method : str, default ``'Boughton'``
-        Algorithm for baseflow separation.
-    """
-    from mpcaHydro import wiski, warehouse
-    df = con.execute("SELECT * FROM staging.wiski").df()
-    df_transformed = wiski.transform(df, filter_qc_codes, data_codes, baseflow_method)
-    warehouse.load_df_to_table(con, df_transformed, 'analytics.wiski')
-    warehouse.update_views(con)
-
-
-def process_equis_data(con: duckdb.DuckDBPyConnection) -> None:
-    """Read EQuIS staging data, transform it, and load into analytics.
-
-    Reads all rows from ``staging.equis``, applies :func:`equis.transform`
-    (constituent mapping, timezone normalisation, unit conversion, non-detect
-    replacement, and hourly averaging), and writes the result to
-    ``analytics.equis``.
-
-    Parameters
-    ----------
-    con : duckdb.DuckDBPyConnection
-        Writable DuckDB connection.
-    """
-    from mpcaHydro import equis, warehouse
-    df = con.execute("SELECT * FROM staging.equis").df()
-    df_transformed = equis.transform(df)
-    warehouse.load_df_to_table(con, df_transformed, 'analytics.equis')
-    warehouse.update_views(con)
-
-
-def process_all_data(
-    con: duckdb.DuckDBPyConnection,
-    filter_qc_codes: bool = True,
-    data_codes: Optional[List[int]] = None,
-    baseflow_method: str = 'Boughton'
-) -> None:
-    """Process both WISKI and EQuIS staging data into analytics.
-
-    Convenience function that calls :func:`process_wiski_data` and
-    :func:`process_equis_data` in sequence.
-
-    Parameters
-    ----------
-    con : duckdb.DuckDBPyConnection
-        Writable DuckDB connection.
-    filter_qc_codes : bool, default True
-        Apply quality-code filtering for WISKI data.
-    data_codes : list of int, optional
-        Custom quality-code whitelist.
-    baseflow_method : str, default ``'Boughton'``
-        Algorithm for baseflow separation.
-    """
-    process_wiski_data(con, filter_qc_codes, data_codes, baseflow_method)
-    process_equis_data(con)
-
-                        
 def download_wiski_data(
     con: duckdb.DuckDBPyConnection,
+    data_dir: Union[str, Path],
     station_ids: List[str],
     start_year: int = 1996,
     end_year: int = 2030,
-    filter_qc_codes: bool = True,
-    data_codes: Optional[List[int]] = None,
-    baseflow_method: str = 'Boughton',
-    overwrite: bool = True,
-    data_dir: Optional[Union[str, Path]] = None
-) -> None:
+    overwrite: bool = True) -> None:
     """Download WISKI data, transform it, and load both raw and analytics.
 
     End-to-end convenience function that:
@@ -253,33 +133,21 @@ def download_wiski_data(
 
     df = wiski.download(station_ids, start_year=start_year, end_year=end_year)
     if not df.empty:
-
-        if data_dir is not None:
-            for sid in df['station_no'].unique():
-                df_station = df[df['station_no'] == sid]
-                storage.save_staging(df_station, data_dir, 'wiski', sid)
-
-
-        # df_transformed = wiski.transform(df.copy(), filter_qc_codes, data_codes, baseflow_method)
-        # # Drop existing data for these stations if overwrite is True
-        # if overwrite:
-        #     warehouse.drop_station_data(con, station_ids, 'wiski')
-        # warehouse.add_df_to_table(con, df, 'staging', 'wiski')
-        # if not df_transformed.empty:
-        #     warehouse.add_df_to_table(con, df_transformed, 'analytics', 'wiski')
-        # warehouse.update_views(con)
+        for sid in df['station_no'].unique():
+            df_station = df[df['station_no'] == sid]
+            storage.save_staging(df_station, data_dir, 'wiski', sid)
+        warehouse._refresh_staging_views(con,data_dir)
     else:
         print('No data necessary for HSPF calibration from wiski for:', station_ids)
 
 
 def download_equis_data(
     con: duckdb.DuckDBPyConnection,
+    data_dir: Union[str, Path],
     station_ids: List[str],
-    oracle_username: str,
-    oracle_password: str,
-    overwrite: bool = True,
-    data_dir: Optional[Union[str, Path]] = None
-) -> None:
+    oracle_username: Optional[str] = None,
+    oracle_password: Optional[str] = None,
+    overwrite: bool = True) -> None:
     """Download EQuIS data, transform it, and load both raw and analytics.
 
     End-to-end convenience function that:
@@ -309,22 +177,45 @@ def download_equis_data(
         print('Connected to Oracle database.')
         df = equis.download(station_ids, connection=oracle_conn)
     if not df.empty:
-        if data_dir is not None:
-            for sid in df['station_no'].unique():
-                df_station = df[df['station_no'] == sid]
-                storage.save_staging(df_station, data_dir, 'equis', sid)
-
-
-        # df_transformed = equis.transform(df.copy())
-        # # Drop existing data for these stations if overwrite is True
-        # if overwrite:
-        #     warehouse.drop_station_data(con, station_ids, 'equis')
-        # warehouse.add_df_to_table(con, df, 'staging', 'equis')
-        # warehouse.add_df_to_table(con, df_transformed, 'analytics', 'equis')
-        # warehouse.update_views(con)
+        for sid in df['SYS_LOC_CODE'].unique():
+            df_station = df[df['SYS_LOC_CODE'] == sid]
+            storage.save_staging(df_station, data_dir, 'equis', sid)
+        warehouse._refresh_staging_views(con,data_dir)
     else:
         print('No data necessary for HSPF calibration from equis for:', station_ids)
     
+
+
+def compute_baseflow(con, data_dir, method='Boughton', min_size=30):
+    """Compute baseflow from hourly Q data and store in derived."""
+    
+    # # Check if already computed for this station+method
+    # existing = con.execute("""
+    #     SELECT 1 FROM derived.baseflow
+    #     WHERE station_id = ? AND method = ?
+    # """, [station_id, method]).fetchone()
+    # if existing:
+    #     return  # already done
+    
+    # Pull the clean flow data (from analytics or staging — your call)
+    df_q = con.execute("""
+        SELECT *
+        FROM staging.wiski
+        WHERE parametertype_id = 11500  -- discharge
+        ORDER BY station_no, Timestamp
+    """).fetch_df()
+
+    for station_id in df_q['station_no'].unique():
+        df_q_station = df_q[df_q['station_no'] == station_id]
+        if not df_q_station.empty:    
+            # Run the Python algorithm
+            bf = baseflow.separation(df_q_station.set_index('Timestamp')[['Value']], method=method)
+            df_q_station['Value'] = bf[method].values # ensure numeric for transformations
+            # Store results with same schema as staging
+            df_q_station.to_parquet(storage.staging_path(data_dir, 'derived', f'{station_id}').with_suffix('.parquet'), index=False)
+        else:
+            print(f"Station {station_id} has insufficient data for baseflow separation (n={len(df_q_station)})")
+    warehouse._refresh_derived_views(con, data_dir)
 
 def get_outlets(con: duckdb.DuckDBPyConnection, model_name: str) -> pd.DataFrame:
     """Query outlet station-reach pairs for a model.
@@ -552,12 +443,12 @@ def get_raw_data(
         query = '''
         SELECT *
         FROM staging.equis
-        WHERE station_id = ?'''
+        WHERE SYS_LOC_CODE = ?'''
     elif station_origin.lower() == 'wiski':
         query = '''
         SELECT *
         FROM staging.wiski
-        WHERE station_id = ?'''
+        WHERE station_no = ?'''
     else:
         raise ValueError(f'Station origin {station_origin} not recognized.')
     return con.execute(query, [station_id]).fetch_df()
@@ -833,7 +724,7 @@ class DataManagerWrapper:
     >>> df = dm.get_observation_data(['E66050001'], 'Q', agg_period='D')
     """
     
-    def __init__(self, db_path: Union[str, Path], reset: bool = False, data_dir: Optional[Union[str, Path]] = None):
+    def __init__(self, data_dir: Union[str, Path], reset: bool = False):
         """Initialise the wrapper with a database path.
 
         Parameters
@@ -843,44 +734,12 @@ class DataManagerWrapper:
         reset : bool, default False
             Re-initialise the database when ``True``.
         """
-        data_dir = Path(data_dir) if data_dir is not None else None
-        db_path = Path(db_path) if db_path is not None else None
-        
-        if data_dir is not None:
-            self.con = warehouse.create_session(data_dir.as_posix())
-            self.data_dir = Path(data_dir)
-            self.db_path = None
-        else:
-            self.db_path = Path(db_path)
-            if reset:
-                self._init_warehouse(reset=True)
-            self.con = self._connect(read_only=False)
-            self.data_dir = None
 
-    def _init_warehouse(self, reset: bool = False) -> None:
-        """Initialise the underlying data warehouse database.
+        self.con = warehouse.create_session(data_dir.as_posix())
+        self.data_dir = Path(data_dir)
+        if reset:
+            raise NotImplementedError('Reset functionality not implemented yet')
 
-        Parameters
-        ----------
-        reset : bool, default False
-            Delete and recreate the database.
-        """
-        init_warehouse(self.db_path, reset)
-
-    def _connect(self, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-        """Create a DuckDB connection to the warehouse.
-
-        Parameters
-        ----------
-        read_only : bool, default False
-            Open in read-only mode.
-
-        Returns
-        -------
-        duckdb.DuckDBPyConnection
-        """
-        return warehouse.connect(self.db_path.as_posix(), read_only=read_only)
-    
     def update_views(self) -> None:
         """Refresh all analytics and reports views."""
         update_views(self.con)
@@ -914,48 +773,12 @@ class DataManagerWrapper:
         See :func:`outlet_summary` for details.
         """
         return outlet_summary(self.con)
-    
-    
-    
-    def process_wiski_data(
-        self,
-        filter_qc_codes: bool = True,
-        data_codes: Optional[List[int]] = None,
-        baseflow_method: str = 'Boughton'
-    ) -> None:
-        """Process WISKI data from staging to analytics.
-
-        See :func:`process_wiski_data` for details.
-        """
-        self.process_wiski_data(self.con, filter_qc_codes, data_codes, baseflow_method)
-
-    def process_equis_data(self) -> None:
-        """Process EQuIS data from staging to analytics.
-
-        See :func:`process_equis_data` for details.
-        """
-        process_equis_data(self.con)
-    
-    def process_all_data(
-        self,
-        filter_qc_codes: bool = True,
-        data_codes: Optional[List[int]] = None,
-        baseflow_method: str = 'Boughton'
-    ) -> None:
-        """Process all data (WISKI and EQuIS) from staging to analytics.
-
-        See :func:`process_all_data` for details.
-        """
-        process_all_data(self.con, filter_qc_codes, data_codes, baseflow_method)
-    
+        
     def download_wiski_data(
         self,
         station_ids: List[str],
         start_year: int = 1996,
         end_year: int = 2030,
-        filter_qc_codes: bool = True,
-        data_codes: Optional[List[int]] = None,
-        baseflow_method: str = 'Boughton',
         replace: bool = False
     ) -> None:
         """Download WISKI data and load into the warehouse.
@@ -963,22 +786,35 @@ class DataManagerWrapper:
         See :func:`download_wiski_data` for details.
         """
         download_wiski_data(
-            self.con, station_ids, start_year, end_year,
-            filter_qc_codes, data_codes, baseflow_method, replace, self.data_dir
+            self.con, self.data_dir, station_ids, start_year, end_year, replace
         )
     
+    def compute_baseflow(self, method='Boughton', min_size=30) -> None:
+        """Compute baseflow from hourly Q data and store in derived.
+
+        See :func:`compute_baseflow` for details.
+        """
+        compute_baseflow(self.con, self.data_dir, method, min_size)
+
+    def set_active_quality_codes(self, data_codes: Optional[List[int]] = None) -> None:
+        """Set the WISKI quality-code filtering options for analytics views.
+
+        See :func:`set_active_quality_codes` for details.
+        """
+        warehouse.set_active_quality_codes(self.con, data_codes)
+
     def download_equis_data(
         self,
         station_ids: List[str],
-        oracle_username: str,
-        oracle_password: str,
+        oracle_username: Optional[str] | None = None,
+        oracle_password: Optional[str] | None = None,
         replace: bool = False
     ) -> None:
         """Download EQuIS data and load into the warehouse.
 
         See :func:`download_equis_data` for details.
         """
-        download_equis_data(self.con, station_ids, oracle_username, oracle_password, replace, self.data_dir)
+        download_equis_data(self.con, self.data_dir, station_ids, oracle_username, oracle_password, replace)
     
     def get_outlets(self, model_name: str) -> pd.DataFrame:
         """Get outlet station-reach pairs for a model.

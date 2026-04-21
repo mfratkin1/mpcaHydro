@@ -36,7 +36,11 @@ SELECT datetime, value, station_id, station_origin, constituent, unit
 FROM analytics.equis
 UNION ALL
 SELECT datetime, value, station_id, station_origin, constituent, unit
-FROM analytics.wiski;
+FROM analytics.wiski
+UNION ALL
+SELECT datetime, value, station_id,station_origin, constituent, unit
+FROM derived.baseflow;
+
 
 -- View: outlet_observations
 -- Links observations to model reaches via outlets
@@ -56,6 +60,7 @@ WHERE os.outlet_id IS NOT NULL
 GROUP BY
     os.outlet_id,
     o.constituent,
+    o.unit,
     o.datetime;
 
 -- View: outlet_observations_with_flow
