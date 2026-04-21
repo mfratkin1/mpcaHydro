@@ -58,10 +58,11 @@ Key data structures
 
 
 from datetime import datetime, timezone, timedelta
+from getpass import getpass
+import os
 import pandas as pd
 from typing import Union, Optional
 import oracledb
-import duckdb
 
 CONNECTION = None
 
@@ -89,14 +90,40 @@ _TZ_OFFSET_HOURS = {
 
 _TARGET_TZ = 'Etc/GMT+6'  # UTC-6 (note: POSIX convention flips the sign)
 
-def connect(user: str, password: str, host: str = "DELTAT", port: int = 1521, sid: str = "DELTAT"):
+def connect(
+    user: str = None,
+    password: str = None,
+    host: str = "DELTAT",
+    port: int = 1521,
+    sid: str = None
+):
     """Create and return an Oracle database connection to the EQuIS instance.
 
     The connection is also stored in the module-level :data:`CONNECTION`
     global so that subsequent calls to :func:`download`, :func:`info`, etc.
     can omit the *connection* parameter.
+    
+    Credentials can be passed directly or read from environment
+    variables. Password lookup is host-specific and must follow this naming convention:
 
+        ORACLE_USER          → username (shared across hosts)
+        ORACLE_PASSWORD_DELTAT  → password for DELTAT
+        ORACLE_PASSWORD_DELTAW  → password for DELTAW
+
+    To set environment variables (no admin required)::
+
+        setx ORACLE_USER myusername
+        setx ORACLE_PASSWORD_DELTAT mypassword
+
+    Then restart your terminal/Jupyter for them to take effect.
     Parameters
+
+    Credential resolution order:
+    1. Explicit parameters (``user=``, ``password=``)
+    2. User environment variables
+    3. Interactive prompt
+
+    
     ----------
     user : str
         Oracle username.
@@ -114,14 +141,34 @@ def connect(user: str, password: str, host: str = "DELTAT", port: int = 1521, si
     oracledb.Connection
         An open Oracle connection.
     """
-    
+    # 1. Try explicit args
+    # 2. Try environment variables
+    user = user or os.environ.get('ORACLE_USER')
+
+    if password is None:
+        host_key = host.upper().replace('-', '_')
+        password = (
+            os.environ.get(f'ORACLE_PASSWORD_{host_key}')
+            or os.environ.get('ORACLE_PASSWORD')
+        )
+
+    # 3. Fall back to interactive prompt
+    if not user:
+        user = input("Oracle username: ")
+    if not password:
+        password = getpass(f"Oracle password for {user}@{host}: ")
+
+    if sid is None:
+        sid = host
+
+    # Legacy 
     global CONNECTION
-    CONNECTION = oracledb.connect(user=user, 
-                                 password=password, 
-                                 host=host, 
-                                 port=port, 
-                                 sid=sid) 
+    CONNECTION = oracledb.connect(
+        user=user, password=password,
+        host=host, port=port, sid=sid
+    )
     return CONNECTION
+
 
 def close_connection(connection: Optional[oracledb.Connection] = None):
     """Close an Oracle database connection.
@@ -160,23 +207,23 @@ def test_connection():
         Always raised.
     """
     raise NotImplementedError("This function is a placeholder for testing Oracle DB connection.")
-    try:
-        # or for SID:
-        # connection = oracledb.connect(user="your_username", 
-        #                             password="your_password", 
-        #                             host="your_host", 
-        #                             port=1521, 
-        #                             sid="your_sid")
+    # try:
+    #     # or for SID:
+    #     # connection = oracledb.connect(user="your_username", 
+    #     #                             password="your_password", 
+    #     #                             host="your_host", 
+    #     #                             port=1521, 
+    #     #                             sid="your_sid")
 
-        print("Successfully connected to Oracle Database")
+    #     print("Successfully connected to Oracle Database")
 
-        # Perform database operations here
-        # ...
-        if connection:
-            connection.close()
-            print("Connection closed")
-    except oracledb.Error as e:
-        print(f"Error connecting to Oracle Database: {e}")
+    #     # Perform database operations here
+    #     # ...
+    #     if connection:
+    #         connection.close()
+    #         print("Connection closed")
+    # except oracledb.Error as e:
+    #     print(f"Error connecting to Oracle Database: {e}")
 
 
 
@@ -246,6 +293,7 @@ def info(station_ids, connection: Optional[oracledb.Connection] = None):
     ValueError
         If no connection is available.
     """
+    
     conn = connection if connection is not None else CONNECTION
     if conn is None:
         raise ValueError("No connection provided and global CONNECTION is not set. Call connect() first or pass a connection.")

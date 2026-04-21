@@ -36,18 +36,6 @@ CREATE TABLE IF NOT EXISTS outlets.outlet_reaches (
     FOREIGN KEY (outlet_id) REFERENCES outlets.outlet_groups(outlet_id)
 );
 
--- Useful views:
-
--- View: station_reach_pairs
--- Derives the implicit many-to-many station <-> reach relationship via shared outlet_id
-CREATE OR REPLACE VIEW outlets.station_reach_pairs AS
-SELECT
-  s.outlet_id,
-  s.station_id,
-  s.station_origin,
-  r.reach_id,
-  r.repository_name
-FROM outlets.outlet_stations AS s
-JOIN outlets.outlet_reaches AS r
-  ON s.outlet_id = r.outlet_id;
+-- Note: the station_reach_pairs view is defined in views_outlets.sql and
+-- created separately by create_outlets_tables() after populating the tables.
 
